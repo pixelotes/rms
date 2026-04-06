@@ -1,0 +1,18 @@
+# Binaries
+rms
+rms-*
+subcrawler
+metacrawler
+*.exe
+
+# Media test files
+media/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

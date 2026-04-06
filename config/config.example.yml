@@ -1,0 +1,53 @@
+app:
+  port: 8082
+  ui_enabled: true
+  # Passwords support environment variables: ${VAR} or $VAR
+  ui_password: "${RMS_PASSWORD}"
+  jwt_secret: "${RMS_JWT_SECRET}"
+  jellyfin_version: "10.10.7"
+  debug: false
+
+player:
+  # Strategies tried in order when playing video. Remove "transcode" on low-power devices.
+  stream_strategy: ["direct", "remux", "transcode"]
+
+libraries:
+  - friendly_name: "Movies"
+    path: "./media/Movies"
+    metadata_lang: en
+    content_type: movies
+
+  - friendly_name: "TV Shows"
+    path: "./media/TV"
+    metadata_lang: en
+    content_type: tvseries
+
+  # - friendly_name: "Anime"
+  #   path: "./media/Anime"
+  #   metadata_lang: en
+  #   content_type: tvseries
+
+# Optional: define users with per-library access.
+# If omitted, a single "rms" user with ui_password is used with access to all libraries.
+# users:
+#   - username: "raul"
+#     password: "${RAUL_PASSWORD}"
+#     libraries: ["Movies", "Anime"]
+#   - username: "maria"
+#     password: "${MARIA_PASSWORD}"
+#     libraries: ["Movies", "TV Shows"]
+
+# Crawler settings (used by subcrawler and metacrawler binaries, not by rms)
+crawlers:
+  subtitles:
+    api_key: "${OPENSUBTITLES_API_KEY}"
+    languages: ["en", "es"]
+  metadata:
+    tmdb_api_key: "${TMDB_API_KEY}"
+  # Periodic auto-scan: fills in missing metadata, subtitles, and thumbnails
+  auto_scan:
+    enabled: false
+    interval_hours: 24
+    metadata: true
+    subtitles: true
+    thumbnails: false  # CPU intensive on low-power devices

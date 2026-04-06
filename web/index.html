@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Raspberry Media Server</title>
+    <link href="/css/video-js.css" rel="stylesheet" />
+    <link href="/css/styles.css" rel="stylesheet" />
+    <style>
+        /* Enhanced UI Styles */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+            color: white;
+        }
+
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid #333;
+            border-top: 4px solid #fff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .loading-strategy {
+            font-size: 14px;
+            color: #ccc;
+        }
+
+        .background-container {
+            position: relative;
+            min-height: 100vh;
+        }
+
+        .background-image {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            opacity: 0;
+            transition: opacity 1s ease-in-out;
+            z-index: -1;
+        }
+
+        .background-image.visible {
+            opacity: 0.3;
+        }
+
+        .content-overlay {
+            position: relative;
+            z-index: 1;
+            background: linear-gradient(to bottom, rgba(18, 18, 18, 0.7) 0%, rgba(18, 18, 18, 1) 100%);
+            min-height: 100vh;
+        }
+
+        .metadata-panel {
+            background: rgba(0, 0, 0, 0.8);
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            color: white;
+        }
+
+        .metadata-title {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .metadata-year {
+            color: #ccc;
+            font-size: 16px;
+            margin-bottom: 10px;
+        }
+
+        .metadata-plot {
+            line-height: 1.6;
+            margin-bottom: 15px;
+        }
+
+        .metadata-details {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            font-size: 14px;
+            color: #ddd;
+        }
+
+        .metadata-detail {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .metadata-detail-label {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .genres {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+        }
+
+        .genre-tag {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+        }
+
+        .rating {
+            color: #ffd700;
+            font-weight: bold;
+        }
+
+        .file-item {
+            transition: transform 0.2s ease;
+        }
+
+        .file-item:hover {
+            transform: translateY(-2px);
+        }
+
+        .error-message {
+            background: #ff4444;
+            color: white;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            text-align: center;
+        }
+
+        .success-message {
+            background: #44ff44;
+            color: black;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            text-align: center;
+        }
+
+        .strategy-indicator {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            z-index: 1000;
+            display: none;
+        }
+
+        .strategy-indicator.show {
+            display: block;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        .file-browser {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 20px;
+        }
+
+        .file-item {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            overflow: hidden;
+            text-align: center;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .file-item:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+        }
+
+        .item-icon {
+            height: 250px;
+            background-color: #222;
+        }
+
+        .item-icon img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .item-name {
+            padding: 15px 10px;
+            font-weight: bold;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .item-year {
+            color: #ccc;
+            font-size: 14px;
+            margin-top: -10px;
+            padding-bottom: 10px;
+        }
+
+        #search-container {
+            margin: 10px 0;
+        }
+
+        .crawl-btn {
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            border: 1px solid #555;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 8px;
+            font-size: 13px;
+        }
+        .crawl-btn:hover { background: rgba(255, 255, 255, 0.2); }
+        .crawl-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        #crawl-actions { margin: 10px 0; }
+        #crawl-output {
+            background: #111;
+            color: #0f0;
+            font-family: monospace;
+            font-size: 12px;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        .subtitle-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            padding: 5px 10px 10px;
+        }
+        .subtitle-tag {
+            background: rgba(100, 100, 255, 0.3);
+            color: #aaf;
+            padding: 2px 6px;
+            border-radius: 8px;
+            font-size: 11px;
+        }
+
+        #search-input {
+            width: 100%;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #555;
+            background: #333;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="background-container">
+        <div class="background-image" id="background-image"></div>
+        <div class="content-overlay">
+            <div id="login-screen">
+                <form id="login-form">
+                    <h2>🎬 RMS Login</h2>
+                    <input type="password" id="password-input" placeholder="Password" required>
+                    <button type="submit">Login</button>
+                    <p id="login-error"></p>
+                </form>
+            </div>
+
+            <div id="app-container" style="display: none;">
+                <header>
+                    <h1>Raspberry Media Server</h1>
+                    <div id="search-container">
+                        <input type="text" id="search-input" placeholder="Search...">
+                    </div>
+                    <div id="breadcrumb"></div>
+                </header>
+                <main>
+                    <div id="metadata-container"></div>
+                    <div id="crawl-actions" style="display: none;">
+                        <button id="btn-crawl-metadata" class="crawl-btn" onclick="crawlMetadata()">Download Metadata</button>
+                        <button id="btn-crawl-subtitles" class="crawl-btn" onclick="crawlSubtitles()">Download Subtitles</button>
+                        <button id="btn-crawl-thumbs" class="crawl-btn" onclick="crawlThumbnails()">Generate Thumbnails</button>
+                    </div>
+                    <div id="crawl-output" style="display: none;"></div>
+                    <div id="file-browser"></div>
+                </main>
+            </div>
+        </div>
+    </div>
+
+    <div id="loading-overlay" class="loading-overlay" style="display: none;">
+        <div class="loading-spinner"></div>
+        <div class="loading-text" id="loading-text">Loading...</div>
+        <div class="loading-strategy" id="loading-strategy"></div>
+    </div>
+
+    <div id="strategy-indicator" class="strategy-indicator"></div>
+
+    <div id="video-player-modal" class="modal-backdrop">
+        <div class="modal-content">
+            <span class="modal-close">&times;</span>
+            <video
+                id="video-player"
+                class="video-js vjs-big-play-centered vjs-fluid"
+                controls
+                preload="auto"
+                data-setup='{"fluid": true}'>
+            </video>
+        </div>
+    </div>
+
+    <script src="https://vjs.zencdn.net/8.10.0/video.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const state = {
+                sessionToken: '',
+                currentPath: '',
+                libraries: [],
+                streamStrategies: ['direct', 'remux', 'transcode'],
+                currentStrategyIndex: 0,
+                currentBackground: null
+            };
+
+            // Search function
+            const searchInput = document.getElementById('search-input');
+
+            searchInput.addEventListener('input', (e) => {
+                const searchTerm = e.target.value.toLowerCase();
+                const items = document.querySelectorAll('.file-item');
+                
+                items.forEach(item => {
+                    const itemName = item.querySelector('.item-name').textContent.toLowerCase();
+                    if (itemName.includes(searchTerm)) {
+                        item.style.display = 'block';
+                    } else {
+                        item.style.display = 'none';
+                    }
+                });
+            });
+
+            // UI Elements
+            const loginScreen = document.getElementById('login-screen');
+            const appContainer = document.getElementById('app-container');
+            const loginForm = document.getElementById('login-form');
+            const fileBrowser = document.getElementById('file-browser');
+            const videoPlayerModal = document.getElementById('video-player-modal');
+            const loadingOverlay = document.getElementById('loading-overlay');
+            const loadingText = document.getElementById('loading-text');
+            const loadingStrategy = document.getElementById('loading-strategy');
+            const strategyIndicator = document.getElementById('strategy-indicator');
+            const backgroundImage = document.getElementById('background-image');
+            const metadataContainer = document.getElementById('metadata-container');
+            const player = videojs('video-player');
+
+            // Utility Functions
+            function showLoading(text, strategy = '') {
+                loadingText.textContent = text;
+                loadingStrategy.textContent = strategy;
+                loadingOverlay.style.display = 'flex';
+            }
+
+            function hideLoading() {
+                loadingOverlay.style.display = 'none';
+            }
+
+            function showStrategyIndicator(strategy) {
+                strategyIndicator.textContent = `Trying: ${strategy.toUpperCase()}`;
+                strategyIndicator.classList.add('show');
+                setTimeout(() => {
+                    strategyIndicator.classList.remove('show');
+                }, 3000);
+            }
+
+            function showMessage(text, type = 'error') {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `${type}-message`;
+                messageDiv.textContent = text;
+                document.body.appendChild(messageDiv);
+                
+                setTimeout(() => {
+                    messageDiv.remove();
+                }, 5000);
+            }
+
+            function setBackground(backgroundUrl) {
+                if (state.currentBackground) {
+                    URL.revokeObjectURL(state.currentBackground);
+                    state.currentBackground = null;
+                }
+                if (backgroundUrl) {
+                    fetchWithAuth(backgroundUrl)
+                        .then(res => res.blob())
+                        .then(blob => {
+                            const url = URL.createObjectURL(blob);
+                            backgroundImage.style.backgroundImage = `url(${url})`;
+                            backgroundImage.classList.add('visible');
+                            state.currentBackground = url;
+                        });
+                } else {
+                    backgroundImage.classList.remove('visible');
+                }
+            }
+
+            // Login Handler
+            loginForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                showLoading('Logging in...');
+                
+                const password = document.getElementById('password-input').value;
+                try {
+                    const response = await fetch('/api/v1/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ password })
+                    });
+                    
+                    if (!response.ok) throw new Error('Incorrect password');
+                    
+                    const { token } = await response.json();
+                    state.sessionToken = token;
+                    loginScreen.style.display = 'none';
+                    appContainer.style.display = 'block';
+                    
+                    hideLoading();
+                    showMessage('Login successful!', 'success');
+                    browseFiles('');
+                } catch (error) {
+                    hideLoading();
+                    document.getElementById('login-error').textContent = error.message;
+                }
+            });
+
+            // API Helper
+            async function fetchWithAuth(url, options = {}) {
+                const headers = { ...options.headers };
+                headers['Authorization'] = `Bearer ${state.sessionToken}`;
+                const response = await fetch(url, { ...options, headers });
+                if (response.status === 401) {
+                    showMessage('Session expired. Please login again.');
+                    window.location.reload();
+                }
+                return response;
+            }
+
+            // Browse Files Function
+            async function browseFiles(path) {
+                state.currentPath = path;
+                showLoading('Loading files...', 'Fetching directory contents');
+                
+                try {
+                    const response = await fetchWithAuth(`/api/v1/browse?path=${encodeURIComponent(path)}`);
+                    const data = await response.json();
+                    const items = data.items || [];
+					const currentFolder = data.current_folder;
+
+                    
+                    if (!path || path === '.') {
+                        state.libraries = items.map(item => ({
+                            friendly_name: item.friendly_name,
+                            path: item.path
+                        }));
+                    }
+                    
+                    if (currentFolder?.backdrop) {
+                        setBackground(currentFolder.backdrop);
+                    } else {
+                        setBackground(null);
+                    }
+                    
+                    renderBreadcrumb(path);
+                    renderMetadata(currentFolder);
+                    renderFileBrowser(items);
+
+                    // Show crawl buttons when inside a library (not root)
+                    const crawlActions = document.getElementById('crawl-actions');
+                    const isInsideLibrary = path && path !== '.';
+                    crawlActions.style.display = isInsideLibrary ? 'block' : 'none';
+
+                    // Load subtitle info for video files
+                    for (const item of items) {
+                        if (!item.is_dir) {
+                            loadSubtitlesList(item.path);
+                        }
+                    }
+
+                    hideLoading();
+                } catch (error) {
+                    hideLoading();
+                    fileBrowser.innerHTML = '<div class="error-message">Error loading files: ' + error.message + '</div>';
+                }
+            }
+
+            // Render Functions
+            function renderMetadata(currentFolder) {
+                if (currentFolder?.metadata) {
+                    const metadata = currentFolder.metadata;
+                    let metadataHtml = `
+                        <div class="metadata-panel">
+                            <div class="metadata-title">${metadata.title || metadata.original_title || 'Unknown Title'}</div>
+                    `;
+                    
+                    if (currentFolder.logo) {
+						metadataHtml += `<img id="metadata-logo" src="" style="max-height: 100px; margin-bottom: 15px;">`;
+					}
+
+					if (currentFolder.backdrop) {
+						metadataHtml += `<img id="metadata-backdrop" src="" style="width: 100%; border-radius: 8px; margin-bottom: 15px;">`;
+					}
+                    
+                    if (metadata.year) {
+                        metadataHtml += `<div class="metadata-year">${metadata.year}</div>`;
+                    }
+                    
+                    if (metadata.plot) {
+                        metadataHtml += `<div class="metadata-plot">${metadata.plot}</div>`;
+                    }
+                    
+                    metadataHtml += '<div class="metadata-details">';
+                    
+                    if (metadata.rating) {
+                        metadataHtml += `
+                            <div class="metadata-detail">
+                                <div class="metadata-detail-label">Rating</div>
+                                <div class="rating">${metadata.rating}/10</div>
+                            </div>
+                        `;
+                    }
+                    
+                    if (metadata.runtime) {
+                        metadataHtml += `
+                            <div class="metadata-detail">
+                                <div class="metadata-detail-label">Runtime</div>
+                                <div>${metadata.runtime} minutes</div>
+                            </div>
+                        `;
+                    }
+                    
+                    if (metadata.studio) {
+                        metadataHtml += `
+                            <div class="metadata-detail">
+                                <div class="metadata-detail-label">Studio</div>
+                                <div>${metadata.studio}</div>
+                            </div>
+                        `;
+                    }
+                    
+                    if (metadata.genres && metadata.genres.length > 0) {
+                        metadataHtml += `
+                            <div class="metadata-detail">
+                                <div class="metadata-detail-label">Genres</div>
+                                <div class="genres">
+                                    ${metadata.genres.map(genre => `<span class="genre-tag">${genre}</span>`).join('')}
+                                </div>
+                            </div>
+                        `;
+                    }
+                    
+                    metadataHtml += '</div></div>';
+                    metadataContainer.innerHTML = metadataHtml;
+
+					if (currentFolder.logo) {
+						fetchWithAuth(currentFolder.logo)
+							.then(res => res.blob())
+							.then(blob => {
+								const url = URL.createObjectURL(blob);
+								document.getElementById('metadata-logo').src = url;
+							});
+					}
+					if (currentFolder.backdrop) {
+						fetchWithAuth(currentFolder.backdrop)
+							.then(res => res.blob())
+							.then(blob => {
+								const url = URL.createObjectURL(blob);
+								document.getElementById('metadata-backdrop').src = url;
+							});
+					}
+
+                } else {
+                    metadataContainer.innerHTML = '';
+                }
+            }
+
+            function renderFileBrowser(items) {
+                fileBrowser.innerHTML = items.map(item => {
+                    const itemClass = `file-item ${item.is_dir ? 'directory' : 'file'}`;
+                    const backClass = item.name === '..' ? ' back-button' : '';
+                    const iconId = `icon-${item.path.replace(/[^a-zA-Z0-9]/g, '-')}`;
+                    const displayName = item.friendly_name || item.name;
+
+                    let iconHtml = '';
+                    if (item.is_dir) {
+                        iconHtml = `<div class="item-icon" id="${iconId}">${item.name === '..' ? '⬆️' : '📁'}</div>`;
+                    } else if (item.thumbnail) {
+                        iconHtml = `<div class="item-icon" id="${iconId}">🎬</div>`;
+                    } else {
+                        iconHtml = '<div class="item-icon">🎬</div>';
+                    }
+                    
+                    // Add year if available in metadata
+                    const year = item.metadata?.year ? `<div class="item-year">${item.metadata.year}</div>` : '';
+
+                    const subsId = !item.is_dir ? `subs-${item.path.replaceAll(/[^a-zA-Z0-9]/g, '-')}` : '';
+
+                    return `
+                        <div class="${itemClass}${backClass}" data-path="${item.path}" data-is-dir="${item.is_dir}">
+                            ${iconHtml}
+                            <div class="item-name">${displayName}</div>
+                            ${year}
+                            ${!item.is_dir ? `<div class="subtitle-list" id="${subsId}"></div>` : ''}
+                        </div>
+                    `;
+                }).join('');
+                
+                // Load folder icons asynchronously
+                items.forEach(item => {
+                    if (item.is_dir && item.icon) {
+                        const iconElement = document.getElementById(`icon-${item.path.replace(/[^a-zA-Z0-9]/g, '-')}`);
+                        if (iconElement) {
+                            fetchWithAuth(item.icon)
+                                .then(res => res.blob())
+                                .then(blob => {
+                                    const url = URL.createObjectURL(blob);
+                                    iconElement.innerHTML = `<img src="${url}" class="folder-image">`;
+                                })
+                                .catch(() => {
+                                    // Keep default folder icon if loading fails
+                                });
+                        }
+                    } else if (item.thumbnail) {
+                        const iconElement = document.getElementById(`icon-${item.path.replace(/[^a-zA-Z0-9]/g, '-')}`);
+                        if (iconElement) {
+                            fetchWithAuth(item.thumbnail)
+                                .then(res => res.blob())
+                                .then(blob => {
+                                    const url = URL.createObjectURL(blob);
+                                    iconElement.innerHTML = `<img src="${url}" class="folder-image">`;
+                                })
+                                .catch(() => {});
+                        }
+                    }
+                });
+            }
+
+            function renderBreadcrumb(path) {
+                const breadcrumb = document.getElementById('breadcrumb');
+                if (!path || path === '.') {
+                    breadcrumb.innerHTML = `<a href="#" data-path="">Home</a>`;
+                    return;
+                }
+
+                let breadcrumbHtml = `<a href="#" data-path="">Home</a>`;
+                let currentLibrary = null;
+
+                for (const lib of state.libraries) {
+                    if (path.startsWith(lib.path)) {
+                        currentLibrary = lib;
+                        break;
+                    }
+                }
+
+                if (currentLibrary) {
+                    breadcrumbHtml += ` / <a href="#" data-path="${currentLibrary.path}">${currentLibrary.friendly_name}</a>`;
+                    const subPath = path.substring(currentLibrary.path.length).replace(/^\/|\/$/g, '');
+                    if (subPath) {
+                        const parts = subPath.split('/');
+                        let currentPath = currentLibrary.path;
+                        for (const part of parts) {
+                            currentPath += `/${part}`;
+                            breadcrumbHtml += ` / <a href="#" data-path="${currentPath}">${part}</a>`;
+                        }
+                    }
+                }
+                breadcrumb.innerHTML = breadcrumbHtml;
+            }
+
+            // Video Player Functions
+            function playVideo(path) {
+                state.currentStrategyIndex = 0;
+                videoPlayerModal.style.display = 'flex';
+                loadVideoWithStrategy(path);
+
+                player.on('error', () => {
+                    const error = player.error();
+                    if (error && error.code === 4) {
+                        state.currentStrategyIndex++;
+                        if (state.currentStrategyIndex < state.streamStrategies.length) {
+                            const nextStrategy = state.streamStrategies[state.currentStrategyIndex];
+                            console.log(`Playback failed, trying next strategy: ${nextStrategy}`);
+                            showMessage(`${state.streamStrategies[state.currentStrategyIndex - 1]} failed, trying ${nextStrategy}`, 'error');
+                            loadVideoWithStrategy(path);
+                        } else {
+							hideLoading();
+                            showMessage('All streaming strategies failed. Please check the file.', 'error');
+                        }
+                    }
+                });
+            }
+
+            async function loadVideoWithStrategy(path) {
+                const strategy = state.streamStrategies[state.currentStrategyIndex];
+                const safePath = path.startsWith('/') ? path.substring(1) : path;
+                const videoUrl = `/api/v1/stream/${encodeURIComponent(safePath)}?strategy=${strategy}`;
+                
+                showStrategyIndicator(strategy);
+                showLoading(`Loading video...`, `Using ${strategy} strategy`);
+                
+                try {
+                    const videoResponse = await fetchWithAuth(videoUrl);
+                    if (!videoResponse.ok) {
+                        throw new Error(`Failed to fetch video with strategy ${strategy}`);
+                    }
+                    
+                    const videoBlob = await videoResponse.blob();
+                    const videoObjectUrl = URL.createObjectURL(videoBlob);
+                    
+                    player.src({ src: videoObjectUrl, type: videoBlob.type || 'video/mp4' });
+
+                    // Clear existing subtitles
+                    const tracks = player.remoteTextTracks();
+                    for (let i = tracks.length - 1; i >= 0; i--) {
+                        player.removeRemoteTextTrack(tracks[i]);
+                    }
+
+                    // Load subtitles
+                    try {
+                        const subtitleResponse = await fetchWithAuth(`/api/v1/subtitles/${encodeURIComponent(safePath)}`);
+                        if (subtitleResponse.ok) {
+                            const subtitleBlob = await subtitleResponse.blob();
+                            const subtitleUrl = URL.createObjectURL(subtitleBlob);
+                            player.addRemoteTextTrack({
+                                kind: 'subtitles',
+                                src: subtitleUrl,
+                                srclang: 'en',
+                                label: 'English',
+                                default: true
+                            }, false);
+                        }
+                    } catch (subtitleError) {
+                        console.log('No subtitles available or failed to load');
+                    }
+                    
+                    hideLoading();
+                    showMessage(`Video loaded successfully with ${strategy}!`, 'success');
+                    player.play();
+                } catch (error) {
+                    console.error("Error loading video:", error);
+                    player.error({code: 4, message: "The media could not be loaded."});
+                }
+            }
+
+            function closeModal() {
+                videoPlayerModal.style.display = 'none';
+                player.pause();
+                player.off('error');
+
+                const currentSrc = player.currentSrc();
+                if (currentSrc && currentSrc.startsWith('blob:')) {
+                    URL.revokeObjectURL(currentSrc);
+                }
+                
+                player.src('');
+                
+                const tracks = player.remoteTextTracks();
+                for (let i = tracks.length - 1; i >= 0; i--) {
+                    const track = tracks[i];
+                    if (track.src && track.src.startsWith('blob:')) {
+                        URL.revokeObjectURL(track.src);
+                    }
+                    player.removeRemoteTextTrack(track);
+                }
+            }
+
+            // Event Listeners
+            fileBrowser.addEventListener('click', (e) => {
+                const item = e.target.closest('.file-item');
+                if (item) {
+                    const path = item.dataset.path;
+                    const isDir = item.dataset.isDir === 'true';
+                    if (isDir) {
+                        browseFiles(path);
+                    } else {
+                        playVideo(path);
+                    }
+                }
+            });
+            
+            document.getElementById('breadcrumb').addEventListener('click', (e) => {
+                e.preventDefault();
+                if(e.target.tagName === 'A') {
+                    const path = e.target.dataset.path;
+                    browseFiles(path);
+                }
+            });
+
+            // Modal close handlers
+            videoPlayerModal.querySelector('.modal-close').addEventListener('click', closeModal);
+            window.addEventListener('click', (e) => {
+                if (e.target === videoPlayerModal) closeModal();
+            });
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && videoPlayerModal.style.display === 'flex') closeModal();
+            });
+
+            // --- Crawl Functions ---
+            window.crawlMetadata = async function() {
+                const btn = document.getElementById('btn-crawl-metadata');
+                const output = document.getElementById('crawl-output');
+                btn.disabled = true;
+                btn.textContent = 'Downloading...';
+                output.style.display = 'block';
+                output.textContent = 'Fetching metadata...\n';
+
+                try {
+                    const resp = await fetchWithAuth('/api/v1/crawl/metadata', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path: state.currentPath })
+                    });
+                    const data = await resp.json();
+                    output.textContent = data.output || (data.success ? 'Done!' : 'Failed: ' + data.error);
+                    if (data.success) {
+                        showMessage('Metadata downloaded!', 'success');
+                        browseFiles(state.currentPath);
+                    }
+                } catch (err) {
+                    output.textContent = 'Error: ' + err.message;
+                }
+                btn.disabled = false;
+                btn.textContent = 'Download Metadata';
+            };
+
+            window.crawlSubtitles = async function() {
+                const btn = document.getElementById('btn-crawl-subtitles');
+                const output = document.getElementById('crawl-output');
+                btn.disabled = true;
+                btn.textContent = 'Downloading...';
+                output.style.display = 'block';
+                output.textContent = 'Fetching subtitles...\n';
+
+                try {
+                    const resp = await fetchWithAuth('/api/v1/crawl/subtitles', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path: state.currentPath })
+                    });
+                    const data = await resp.json();
+                    output.textContent = data.output || (data.success ? 'Done!' : 'Failed: ' + data.error);
+                    if (data.success) {
+                        showMessage('Subtitles downloaded!', 'success');
+                        browseFiles(state.currentPath);
+                    }
+                } catch (err) {
+                    output.textContent = 'Error: ' + err.message;
+                }
+                btn.disabled = false;
+                btn.textContent = 'Download Subtitles';
+            };
+
+            window.crawlThumbnails = async function() {
+                const btn = document.getElementById('btn-crawl-thumbs');
+                const output = document.getElementById('crawl-output');
+                btn.disabled = true;
+                btn.textContent = 'Generating...';
+                output.style.display = 'block';
+                output.textContent = 'Generating thumbnails (this may take a while)...\n';
+
+                try {
+                    const resp = await fetchWithAuth('/api/v1/crawl/thumbnails', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path: state.currentPath })
+                    });
+                    const data = await resp.json();
+                    output.textContent = data.output || (data.success ? 'Done!' : 'Failed: ' + data.error);
+                    if (data.success) {
+                        showMessage('Thumbnails generated!', 'success');
+                        browseFiles(state.currentPath);
+                    }
+                } catch (err) {
+                    output.textContent = 'Error: ' + err.message;
+                }
+                btn.disabled = false;
+                btn.textContent = 'Generate Thumbnails';
+            };
+
+            async function loadSubtitlesList(videoPath) {
+                try {
+                    const resp = await fetchWithAuth(`/api/v1/subtitles-list/${encodeURIComponent(videoPath)}`);
+                    if (!resp.ok) return;
+                    const subs = await resp.json();
+                    if (!subs || subs.length === 0) return;
+
+                    const itemId = `subs-${videoPath.replace(/[^a-zA-Z0-9]/g, '-')}`;
+                    const container = document.getElementById(itemId);
+                    if (!container) return;
+
+                    container.innerHTML = subs.map(s =>
+                        `<span class="subtitle-tag">${s.label}</span>`
+                    ).join('');
+                } catch (e) {
+                    // Silently ignore subtitle list failures
+                }
+            }
+        });
+    </script>
+</body>
+</html>
