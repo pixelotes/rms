@@ -68,13 +68,19 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) jwtMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var tokenString string
+
 		auth := r.Header.Get("Authorization")
-		if !strings.HasPrefix(auth, "Bearer ") {
+		if strings.HasPrefix(auth, "Bearer ") {
+			tokenString = strings.TrimPrefix(auth, "Bearer ")
+		} else if t := r.URL.Query().Get("token"); t != "" {
+			tokenString = t
+		}
+
+		if tokenString == "" {
 			respondError(w, http.StatusUnauthorized, "Missing or invalid token")
 			return
 		}
-
-		tokenString := strings.TrimPrefix(auth, "Bearer ")
 		username := s.parseToken(tokenString)
 		if username == "" {
 			respondError(w, http.StatusUnauthorized, "Invalid or expired token")

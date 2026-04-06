@@ -141,6 +141,11 @@ func (s *Server) handleSubtitlesList(w http.ResponseWriter, r *http.Request) {
 		filePath = decoded
 	}
 
+	// Ensure absolute path
+	if !strings.HasPrefix(filePath, "/") {
+		filePath = "/" + filePath
+	}
+
 	if !media.IsPathAllowed(filePath, s.librariesForRequest(r)) {
 		respondError(w, http.StatusForbidden, "Path denied")
 		return

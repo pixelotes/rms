@@ -40,6 +40,7 @@ func (s *Server) registerRoutes() {
 	// Static files (Web UI) - conditional
 	if s.config.App.UIEnabled {
 		s.router.PathPrefix("/css/").Handler(http.StripPrefix("/css/", http.FileServer(http.Dir("web/css"))))
+		s.router.PathPrefix("/js/").Handler(http.StripPrefix("/js/", http.FileServer(http.Dir("web/js"))))
 		s.router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			http.ServeFile(w, r, "web/index.html")
 		})
