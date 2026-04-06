@@ -16,3 +16,6 @@ media/
 # OS
 .DS_Store
 Thumbs.db
+
+# CONFIG
+config/config.yml
