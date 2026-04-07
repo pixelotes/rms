@@ -7,11 +7,45 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/gorilla/mux"
+
 	"raspberry-media-server/internal/media"
 )
 
 type crawlRequest struct {
 	Path string `json:"path"`
+}
+
+func (s *Server) handleDuration(w http.ResponseWriter, r *http.Request) {
+	filePath := mux.Vars(r)["filePath"]
+	if decoded, err := media.ItemPath(filePath); err == nil && strings.Contains(decoded, "/") {
+		filePath = decoded
+	}
+	if !strings.HasPrefix(filePath, "/") {
+		filePath = "/" + filePath
+	}
+	if !media.IsPathAllowed(filePath, s.librariesForRequest(r)) {
+		respondError(w, http.StatusForbidden, "Path denied")
+		return
+	}
+
+	// Try episode NFO first
+	var minutes int
+	if nfo, err := media.ParseEpisodeNFO(filePath); err == nil {
+		if nfo.StreamDetails != nil && nfo.StreamDetails.DurationSeconds > 0 {
+			minutes = nfo.StreamDetails.DurationSeconds / 60
+		} else if nfo.Runtime > 0 {
+			minutes = nfo.Runtime
+		}
+	}
+	// Fallback to ffprobe
+	if minutes == 0 {
+		if secs := media.ProbeDuration(filePath); secs > 0 {
+			minutes = int(secs) / 60
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{"minutes": minutes})
 }
 
 func (s *Server) handleCrawlMetadata(w http.ResponseWriter, r *http.Request) {

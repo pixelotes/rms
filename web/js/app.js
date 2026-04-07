@@ -68,17 +68,42 @@ document.addEventListener('DOMContentLoaded', () => {
             renderMetadata(folder);
             renderFiles(items);
             $('crawl-actions').style.display = path && path !== '.' ? 'flex' : 'none';
-            items.filter(i => !i.is_dir).forEach(i => loadSubs(i.path));
+            items.filter(i => !i.is_dir).forEach(i => {
+                loadSubs(i.path);
+                if (!i.metadata?.runtime) loadDuration(i.path);
+            });
             hideLoading();
         } catch (err) { hideLoading(); fileBrowser.innerHTML = `<p style="color:#ef5350">Error: ${err.message}</p>`; }
     }
 
+    function getBackPath() {
+        if (!state.currentPath || state.currentPath === '.') return null;
+        // Find parent: if it's a library root go home, otherwise go up one level
+        const lib = state.libraries.find(l => state.currentPath === l.path);
+        if (lib) return '';
+        const parent = state.currentPath.substring(0, state.currentPath.lastIndexOf('/'));
+        return parent || '';
+    }
+
     function renderMetadata(folder) {
-        if (!folder?.metadata) { metadataContainer.innerHTML = ''; return; }
+        const backPath = getBackPath();
+        const backBtn = backPath !== null ? `<a href="#" class="back-btn" id="back-btn">&#8592;</a>` : '';
+
+        if (!folder?.metadata) {
+            if (backPath !== null) {
+                // Show folder name + back button even without NFO
+                const dirName = state.currentPath.split('/').pop() || '';
+                metadataContainer.innerHTML = `<div class="meta-hero"><h2>${backBtn} ${dirName}</h2></div>`;
+                $('back-btn')?.addEventListener('click', e => { e.preventDefault(); browseFiles(backPath); });
+            } else {
+                metadataContainer.innerHTML = '';
+            }
+            return;
+        }
         const m = folder.metadata;
         let html = '<div class="meta-hero">';
         if (folder.logo) html += `<img class="meta-logo" id="meta-logo" src="">`;
-        html += `<h2>${m.title || m.original_title || ''}</h2>`;
+        html += `<h2>${backBtn} ${m.title || m.original_title || ''}</h2>`;
         if (m.year) html += `<div class="meta-year">${m.year}</div>`;
         if (m.plot) html += `<div class="meta-plot">${m.plot}</div>`;
         html += '<div class="meta-badges">';
@@ -89,13 +114,18 @@ document.addEventListener('DOMContentLoaded', () => {
         html += '</div></div>';
         metadataContainer.innerHTML = html;
         if (folder.logo) fetchWithAuth(folder.logo).then(r=>r.blob()).then(b=> { $('meta-logo').src = URL.createObjectURL(b); });
+        $('back-btn')?.addEventListener('click', e => { e.preventDefault(); browseFiles(backPath); });
     }
 
     function renderFiles(items) {
         fileBrowser.innerHTML = items.map(item => {
             const id = `icon-${item.path.replace(/[^a-zA-Z0-9]/g, '-')}`;
             const name = item.friendly_name || item.name;
-            const year = item.metadata?.year ? `<div class="item-year">${item.metadata.year}</div>` : '';
+            const durId = !item.is_dir ? `dur-${item.path.replace(/[^a-zA-Z0-9]/g, '-')}` : '';
+            let detail = '';
+            if (item.metadata?.runtime) detail = `<div class="item-year">${item.metadata.runtime} min</div>`;
+            else if (item.metadata?.year) detail = `<div class="item-year">${item.metadata.year}</div>`;
+            else if (!item.is_dir) detail = `<div class="item-year" id="${durId}"></div>`;
             const subsId = !item.is_dir ? `subs-${item.path.replace(/[^a-zA-Z0-9]/g, '-')}` : '';
             let poster;
             if (item.name === '..') poster = `<div class="item-poster" id="${id}">&#8617;</div>`;
@@ -105,7 +135,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 ${poster}
                 <div class="item-info">
                     <div class="item-name" title="${name}">${name}</div>
-                    ${year}
+                    ${detail}
                     ${!item.is_dir ? `<div class="item-subs" id="${subsId}"></div>` : ''}
                 </div>
             </div>`;
@@ -224,9 +254,32 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (err) { toast(`${label} error: ${err.message}`); }
         btn.innerHTML = origHTML; btn.disabled = false;
     }
+    window.setView = function(mode) {
+        const grid = $('file-browser');
+        $('view-grid').classList.toggle('active', mode === 'grid');
+        $('view-list').classList.toggle('active', mode === 'list');
+        grid.classList.toggle('list-view', mode === 'list');
+        localStorage.setItem('rms-view', mode);
+    };
+    // Restore saved view preference
+    if (localStorage.getItem('rms-view') === 'list') {
+        $('file-browser').classList.add('list-view');
+        $('view-list')?.classList.add('active');
+        $('view-grid')?.classList.remove('active');
+    }
+
     window.crawlMetadata = () => runCrawl('metadata', 'btn-crawl-metadata', 'Metadata');
     window.crawlSubtitles = () => runCrawl('subtitles', 'btn-crawl-subtitles', 'Subtitles');
     window.crawlThumbnails = () => runCrawl('thumbnails', 'btn-crawl-thumbs', 'Thumbnails');
+
+    async function loadDuration(videoPath) {
+        try {
+            const data = await (await fetchWithAuth(`/api/v1/duration/${encodeURIComponent(videoPath)}`)).json();
+            if (!data?.minutes) return;
+            const el = document.getElementById(`dur-${videoPath.replace(/[^a-zA-Z0-9]/g, '-')}`);
+            if (el) el.textContent = `${data.minutes} min`;
+        } catch {}
+    }
 
     async function loadSubs(videoPath) {
         try {

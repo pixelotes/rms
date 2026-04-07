@@ -60,6 +60,7 @@ func (s *Server) registerRoutes() {
 	protected.HandleFunc("/subtitles/{filePath:.+}", s.handleSubtitles).Methods("GET")
 	protected.HandleFunc("/subtitles-list/{filePath:.+}", s.handleSubtitlesList).Methods("GET")
 	protected.HandleFunc("/images/{imageId}", s.handleImage).Methods("GET")
+	protected.HandleFunc("/duration/{filePath:.+}", s.handleDuration).Methods("GET")
 	protected.HandleFunc("/crawl/metadata", s.handleCrawlMetadata).Methods("POST")
 	protected.HandleFunc("/crawl/subtitles", s.handleCrawlSubtitles).Methods("POST")
 	protected.HandleFunc("/crawl/thumbnails", s.handleCrawlThumbnails).Methods("POST")
@@ -69,9 +70,13 @@ func (s *Server) registerRoutes() {
 
 	// Jellyfin public endpoints
 	jf.HandleFunc("/System/Info/Public", s.jfSystemInfoPublic).Methods("GET")
+	jf.HandleFunc("/system/info/public", s.jfSystemInfoPublic).Methods("GET")
 	jf.HandleFunc("/Users/Public", s.jfUsersPublic).Methods("GET")
 	jf.HandleFunc("/Users/AuthenticateByName", s.jfAuthenticateByName).Methods("POST")
 	jf.HandleFunc("/Branding/Configuration", s.jfBrandingConfig).Methods("GET")
+	jf.HandleFunc("/QuickConnect/Initiate", func(w http.ResponseWriter, r *http.Request) {
+		respondJSON(w, http.StatusOK, map[string]interface{}{"Error": "QuickConnect is not available"})
+	}).Methods("POST", "GET")
 
 	// Images - public (clients load these as direct URLs without auth headers)
 	jf.HandleFunc("/Items/{itemId}/Images/{imageType}", s.jfGetItemImage).Methods("GET", "HEAD")

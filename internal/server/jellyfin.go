@@ -94,6 +94,7 @@ func (s *Server) jfAuthenticateByName(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"Username"`
 		Pw       string `json:"Pw"`
+		Password string `json:"Password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request")
@@ -105,7 +106,12 @@ func (s *Server) jfAuthenticateByName(w http.ResponseWriter, r *http.Request) {
 		username = "rms"
 	}
 
-	user := s.config.AuthenticateUser(username, req.Pw)
+	pw := req.Pw
+	if pw == "" {
+		pw = req.Password
+	}
+
+	user := s.config.AuthenticateUser(username, pw)
 	if user == nil {
 		respondError(w, http.StatusUnauthorized, "Invalid username or password")
 		return
