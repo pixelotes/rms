@@ -26,11 +26,12 @@ type CrawlerConfig struct {
 }
 
 type AutoScanConfig struct {
-	Enabled       bool `yaml:"enabled"`
-	IntervalHours int  `yaml:"interval_hours"`
-	Metadata      bool `yaml:"metadata"`
-	Subtitles     bool `yaml:"subtitles"`
-	Thumbnails    bool `yaml:"thumbnails"`
+	Enabled       bool   `yaml:"enabled"`
+	Schedule      string `yaml:"schedule"`       // "HH:MM" daily schedule (e.g. "03:00")
+	IntervalHours int    `yaml:"interval_hours"` // fallback if schedule not set
+	Metadata      bool   `yaml:"metadata"`
+	Subtitles     bool   `yaml:"subtitles"`
+	Thumbnails    bool   `yaml:"thumbnails"`
 }
 
 type SubCrawlerConfig struct {
@@ -39,8 +40,11 @@ type SubCrawlerConfig struct {
 }
 
 type MetaCrawlerConfig struct {
-	TMDBKey string `yaml:"tmdb_api_key"`
-	TraktID string `yaml:"trakt_client_id"`
+	TMDBKey             string   `yaml:"tmdb_api_key"`
+	TraktID             string   `yaml:"trakt_client_id"`
+	AnimeProviders      []string `yaml:"anime_providers"`
+	MovieProviders      []string `yaml:"movie_providers"`
+	TVSeriesProviders   []string `yaml:"tvseries_providers"`
 }
 
 type User struct {
@@ -68,7 +72,8 @@ type Library struct {
 	MetadataLang      string   `yaml:"metadata_lang"`
 	DownloadMetadata  YAMLBool `yaml:"download_metadata"`
 	DownloadSubtitles YAMLBool `yaml:"download_subtitles"`
-	ContentType       string   `yaml:"content_type"` // "movies" | "tvseries"
+	ContentType       string   `yaml:"content_type"` // "movies" | "tvseries" | "anime"
+	Providers         []string `yaml:"providers,omitempty"`
 }
 
 // YAMLBool handles YAML booleans that may be strings ("true"/"false") or native bools.
@@ -146,6 +151,15 @@ func (c *Config) setDefaults() {
 	}
 	if c.Crawlers.AutoScan.IntervalHours == 0 {
 		c.Crawlers.AutoScan.IntervalHours = 24
+	}
+	if len(c.Crawlers.Metadata.AnimeProviders) == 0 {
+		c.Crawlers.Metadata.AnimeProviders = []string{"anilist"}
+	}
+	if len(c.Crawlers.Metadata.MovieProviders) == 0 {
+		c.Crawlers.Metadata.MovieProviders = []string{"tmdb"}
+	}
+	if len(c.Crawlers.Metadata.TVSeriesProviders) == 0 {
+		c.Crawlers.Metadata.TVSeriesProviders = []string{"tvmaze"}
 	}
 }
 

@@ -60,10 +60,10 @@ func NewClient(apiKey string, languages []string) *Client {
 }
 
 // ProcessFile searches and downloads subtitles for a single video file.
-// Returns the number of subtitles downloaded.
-func (c *Client) ProcessFile(videoPath string) (int, error) {
+// Returns the number of subtitles downloaded, the number of missing languages, and any error.
+func (c *Client) ProcessFile(videoPath string) (int, int, error) {
 	if c.apiKey == "" {
-		return 0, fmt.Errorf("OpenSubtitles API key not configured")
+		return 0, 0, fmt.Errorf("OpenSubtitles API key not configured")
 	}
 
 	videoBase := strings.TrimSuffix(filepath.Base(videoPath), filepath.Ext(videoPath))
@@ -72,13 +72,13 @@ func (c *Client) ProcessFile(videoPath string) (int, error) {
 	// Check which languages we already have
 	missing := c.missingLanguages(videoDir, videoBase)
 	if len(missing) == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
 
 	// Search by hash first, then by filename
 	subs, err := c.search(videoPath, missing)
 	if err != nil {
-		return 0, err
+		return 0, len(missing), err
 	}
 
 	// Download one subtitle per missing language
@@ -100,7 +100,7 @@ func (c *Client) ProcessFile(videoPath string) (int, error) {
 		fmt.Printf("  [+] Downloaded: %s\n", filepath.Base(destPath))
 	}
 
-	return downloaded, nil
+	return downloaded, len(missing), nil
 }
 
 func (c *Client) missingLanguages(dir, videoBase string) []string {
@@ -266,6 +266,7 @@ func (c *Client) downloadAttempt(fileID int, destPath string) error {
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("Api-Key", c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "*/*")
 	req.Header.Set("User-Agent", userAgent)
 }
 

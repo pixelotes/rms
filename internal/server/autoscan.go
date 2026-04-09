@@ -14,12 +14,51 @@ func (s *Server) startAutoScan() {
 		return
 	}
 
+	if cfg.Schedule != "" {
+		s.startScheduledScan(cfg)
+	} else {
+		s.startIntervalScan(cfg)
+	}
+}
+
+func (s *Server) startScheduledScan(cfg config.AutoScanConfig) {
+	log.Printf("Auto-scan scheduled daily at %s (metadata=%v, subtitles=%v, thumbnails=%v)",
+		cfg.Schedule, cfg.Metadata, cfg.Subtitles, cfg.Thumbnails)
+
+	go func() {
+		for {
+			now := time.Now()
+			next, err := nextScheduleTime(now, cfg.Schedule)
+			if err != nil {
+				log.Printf("Auto-scan: invalid schedule %q: %v", cfg.Schedule, err)
+				return
+			}
+			log.Printf("Auto-scan: next run at %s", next.Format("2006-01-02 15:04"))
+			time.Sleep(time.Until(next))
+			s.runAutoScan()
+		}
+	}()
+}
+
+func nextScheduleTime(now time.Time, schedule string) (time.Time, error) {
+	t, err := time.Parse("15:04", schedule)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	next := time.Date(now.Year(), now.Month(), now.Day(), t.Hour(), t.Minute(), 0, 0, now.Location())
+	if !next.After(now) {
+		next = next.Add(24 * time.Hour)
+	}
+	return next, nil
+}
+
+func (s *Server) startIntervalScan(cfg config.AutoScanConfig) {
 	interval := time.Duration(cfg.IntervalHours) * time.Hour
 	log.Printf("Auto-scan enabled: every %dh (metadata=%v, subtitles=%v, thumbnails=%v)",
 		cfg.IntervalHours, cfg.Metadata, cfg.Subtitles, cfg.Thumbnails)
 
 	go func() {
-		// Run once at startup after a short delay
 		time.Sleep(30 * time.Second)
 		s.runAutoScan()
 
@@ -62,7 +101,7 @@ func runCrawler(name, configPath string, extraArgs []string) {
 	args = append(args, extraArgs...)
 
 	log.Printf("Auto-scan: running %s %v", name, args)
-	cmd := exec.Command(bin, args...)
+	cmd := niceCommand(bin, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Auto-scan: %s failed: %v\n%s", name, err, string(output))

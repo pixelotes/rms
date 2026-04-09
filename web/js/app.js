@@ -252,7 +252,7 @@ document.addEventListener('DOMContentLoaded', () => {
             toast(data.success ? `${label} complete!` : `${label} failed`, data.success ? 'success' : 'error');
             if (data.success) browseFiles(state.currentPath);
         } catch (err) { toast(`${label} error: ${err.message}`); }
-        btn.innerHTML = origHTML; btn.disabled = false;
+        finally { btn.innerHTML = origHTML; btn.disabled = false; }
     }
     window.setView = function(mode) {
         const grid = $('file-browser');
@@ -269,8 +269,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     window.crawlMetadata = () => runCrawl('metadata', 'btn-crawl-metadata', 'Metadata');
-    window.crawlSubtitles = () => runCrawl('subtitles', 'btn-crawl-subtitles', 'Subtitles');
     window.crawlThumbnails = () => runCrawl('thumbnails', 'btn-crawl-thumbs', 'Thumbnails');
+
+    window.crawlSubtitles = () => runCrawl('subtitles', 'btn-crawl-subtitles', 'Subtitles');
 
     async function loadDuration(videoPath) {
         try {

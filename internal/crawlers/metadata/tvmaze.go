@@ -74,6 +74,7 @@ func (t *TVmazeClient) SearchTVShow(title string) (*TVShowResult, error) {
 				Number  int    `json:"number"`
 				Name    string `json:"name"`
 				Airdate string `json:"airdate"`
+				Runtime int    `json:"runtime"`
 			} `json:"episodes"`
 		} `json:"_embedded"`
 	}
@@ -108,6 +109,7 @@ func (t *TVmazeClient) SearchTVShow(title string) (*TVShowResult, error) {
 			Number:  ep.Number,
 			Title:   ep.Name,
 			AirDate: ep.Airdate,
+			Runtime: ep.Runtime,
 		})
 	}
 

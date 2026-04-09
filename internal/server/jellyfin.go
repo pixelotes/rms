@@ -1214,35 +1214,7 @@ func extractSeasonNumber(name string) int {
 }
 
 func extractEpisodeNumber(filename string) int {
-	// Match S01E01, S1E1, etc.
-	lower := strings.ToLower(filename)
-
-	// Try SxxExx pattern
-	for i := 0; i < len(lower)-1; i++ {
-		if lower[i] == 'e' && i > 0 && (lower[i-1] >= '0' && lower[i-1] <= '9' || lower[i-1] == ' ') {
-			numStr := ""
-			for j := i + 1; j < len(lower) && lower[j] >= '0' && lower[j] <= '9'; j++ {
-				numStr += string(lower[j])
-			}
-			if n, err := strconv.Atoi(numStr); err == nil && n > 0 {
-				return n
-			}
-		}
-	}
-
-	// Try " - XX " or " XX " pattern
-	parts := strings.Split(filename, " - ")
-	if len(parts) >= 2 {
-		numStr := strings.TrimSpace(parts[1])
-		if idx := strings.IndexByte(numStr, ' '); idx > 0 {
-			numStr = numStr[:idx]
-		}
-		if n, err := strconv.Atoi(numStr); err == nil {
-			return n
-		}
-	}
-
-	return 0
+	return media.ExtractEpisodeNumber(filename)
 }
 
 func cleanEpisodeName(filename string) string {

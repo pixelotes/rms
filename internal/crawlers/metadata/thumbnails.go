@@ -27,17 +27,26 @@ func GenerateThumbnail(videoPath string) error {
 		return fmt.Errorf("ffmpeg not found")
 	}
 
-	// Extract a frame at ~5 minutes (or 10% for short videos)
-	args := []string{
-		"-ss", "300", // seek to 5 min
+	// Extract a frame at ~5 minutes.
+	// -ss before -i uses input seeking (fast keyframe seek).
+	ffmpegArgs := []string{
+		"-ss", "300",
 		"-i", videoPath,
-		"-vframes", "1",
+		"-frames:v", "1",
 		"-q:v", "5",
 		"-vf", "scale=480:-1",
+		"-y",
 		thumbPath,
 	}
 
-	cmd := exec.Command(ffmpegPath, args...)
+	// Run with lowest CPU priority via nice if available
+	var cmd *exec.Cmd
+	if nicePath, err := exec.LookPath("nice"); err == nil {
+		args := append([]string{"-n", "19", ffmpegPath}, ffmpegArgs...)
+		cmd = exec.Command(nicePath, args...)
+	} else {
+		cmd = exec.Command(ffmpegPath, ffmpegArgs...)
+	}
 	if output, err := cmd.CombinedOutput(); err != nil {
 		os.Remove(thumbPath) // Clean up partial file
 		return fmt.Errorf("ffmpeg failed: %s", string(output))

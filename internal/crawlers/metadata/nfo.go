@@ -84,6 +84,7 @@ func WriteEpisodeNFO(videoPath string, showTitle string, season int, ep Episode)
 		Title   string   `xml:"title"`
 		Season  int      `xml:"season"`
 		Episode int      `xml:"episode"`
+		Runtime int      `xml:"runtime,omitempty"`
 		Aired   string   `xml:"aired,omitempty"`
 		Plot    string   `xml:"plot,omitempty"`
 	}
@@ -92,6 +93,7 @@ func WriteEpisodeNFO(videoPath string, showTitle string, season int, ep Episode)
 		Title:   ep.Title,
 		Season:  season,
 		Episode: ep.Number,
+		Runtime: ep.Runtime,
 		Aired:   ep.AirDate,
 	}
 

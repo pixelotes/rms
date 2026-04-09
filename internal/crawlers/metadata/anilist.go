@@ -106,13 +106,14 @@ func (a *AniListClient) SearchAnime(title string) (*TVShowResult, error) {
 	}
 
 	result := &TVShowResult{
-		ID:        strconv.Itoa(anime.ID),
-		Title:     name,
-		Year:      anime.StartDate.Year,
-		Overview:  anime.Description,
-		PosterURL: posterURL,
-		Genres:    anime.Genres,
-		Seasons:   make(map[int][]Episode),
+		ID:          strconv.Itoa(anime.ID),
+		Title:       name,
+		Year:        anime.StartDate.Year,
+		Overview:    anime.Description,
+		PosterURL:   posterURL,
+		BackdropURL: anime.BannerImage,
+		Genres:      anime.Genres,
+		Seasons:     make(map[int][]Episode),
 	}
 
 	if len(anime.Studios.Nodes) > 0 {

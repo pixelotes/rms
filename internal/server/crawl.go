@@ -2,15 +2,19 @@ package server
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
 
 	"github.com/gorilla/mux"
 
 	"raspberry-media-server/internal/media"
 )
+
+// Limit concurrent ffprobe processes to avoid OOM on low-memory devices.
+var probeSem = make(chan struct{}, 2)
+var probeCache sync.Map
 
 type crawlRequest struct {
 	Path string `json:"path"`
@@ -38,10 +42,19 @@ func (s *Server) handleDuration(w http.ResponseWriter, r *http.Request) {
 			minutes = nfo.Runtime
 		}
 	}
-	// Fallback to ffprobe
+	// Fallback to ffprobe with concurrency limit and caching
 	if minutes == 0 {
-		if secs := media.ProbeDuration(filePath); secs > 0 {
-			minutes = int(secs) / 60
+		if cached, ok := probeCache.Load(filePath); ok {
+			minutes = cached.(int)
+		} else {
+			probeSem <- struct{}{}
+			secs := media.ProbeDuration(filePath)
+			<-probeSem
+			if secs > 0 {
+				minutes = int(secs) / 60
+				probeCache.Store(filePath, minutes)
+				media.UpdateEpisodeRuntime(filePath, minutes)
+			}
 		}
 	}
 
@@ -78,7 +91,7 @@ func (s *Server) handleCrawlMetadata(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cmd := exec.Command(bin, args...)
+	cmd := niceCommand(bin, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		respondJSON(w, http.StatusOK, map[string]interface{}{
@@ -114,7 +127,7 @@ func (s *Server) handleCrawlSubtitles(w http.ResponseWriter, r *http.Request) {
 
 	args := []string{"--recursive", "--path", req.Path}
 
-	cmd := exec.Command(bin, args...)
+	cmd := niceCommand(bin, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		respondJSON(w, http.StatusOK, map[string]interface{}{
@@ -150,7 +163,7 @@ func (s *Server) handleCrawlThumbnails(w http.ResponseWriter, r *http.Request) {
 
 	args := []string{"--thumbnails", "--path", req.Path}
 
-	cmd := exec.Command(bin, args...)
+	cmd := niceCommand(bin, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		respondJSON(w, http.StatusOK, map[string]interface{}{
@@ -207,5 +220,14 @@ func (s *Server) handleSubtitlesList(w http.ResponseWriter, r *http.Request) {
 }
 
 func absPath(p string) (string, error) {
-	return fmt.Sprintf("%s", p), nil
+	return p, nil
+}
+
+// niceCommand wraps a command with nice -n 19 for low CPU priority.
+func niceCommand(bin string, args ...string) *exec.Cmd {
+	if nicePath, err := exec.LookPath("nice"); err == nil {
+		niceArgs := append([]string{"-n", "19", bin}, args...)
+		return exec.Command(nicePath, niceArgs...)
+	}
+	return exec.Command(bin, args...)
 }

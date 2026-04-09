@@ -107,6 +107,104 @@ func (t *TMDBClient) enrichMovie(id int, movie *MovieResult) {
 	}
 }
 
+func (t *TMDBClient) SearchTVShow(title string, year int) (*TVShowResult, error) {
+	params := url.Values{
+		"api_key":  {t.apiKey},
+		"language": {t.language},
+		"query":    {title},
+	}
+	if year > 0 {
+		params.Add("first_air_date_year", strconv.Itoa(year))
+	}
+
+	var searchResp struct {
+		Results []struct {
+			ID           int     `json:"id"`
+			Name         string  `json:"name"`
+			FirstAirDate string  `json:"first_air_date"`
+			Overview     string  `json:"overview"`
+			PosterPath   string  `json:"poster_path"`
+			BackdropPath string  `json:"backdrop_path"`
+			VoteAverage  float64 `json:"vote_average"`
+		} `json:"results"`
+	}
+
+	if err := t.get("/search/tv", params, &searchResp); err != nil {
+		return nil, err
+	}
+	if len(searchResp.Results) == 0 {
+		return nil, fmt.Errorf("no results found for '%s'", title)
+	}
+
+	r := searchResp.Results[0]
+
+	result := &TVShowResult{
+		TMDBID:      strconv.Itoa(r.ID),
+		Title:       r.Name,
+		Overview:    r.Overview,
+		PosterURL:   tmdbImageURL(r.PosterPath, "w500"),
+		BackdropURL: tmdbImageURL(r.BackdropPath, "w1280"),
+		Rating:      r.VoteAverage,
+		Seasons:     make(map[int][]Episode),
+	}
+	if r.FirstAirDate != "" {
+		if parsed, err := time.Parse("2006-01-02", r.FirstAirDate); err == nil {
+			result.Year = parsed.Year()
+		}
+	}
+
+	// Fetch show details for genres, studio, status, season count
+	var details struct {
+		Genres []struct {
+			Name string `json:"name"`
+		} `json:"genres"`
+		Networks []struct {
+			Name string `json:"name"`
+		} `json:"networks"`
+		Status       string `json:"status"`
+		NumberOfSeasons int `json:"number_of_seasons"`
+	}
+
+	path := fmt.Sprintf("/tv/%d", r.ID)
+	if err := t.get(path, url.Values{"api_key": {t.apiKey}, "language": {t.language}}, &details); err == nil {
+		for _, g := range details.Genres {
+			result.Genres = append(result.Genres, g.Name)
+		}
+		if len(details.Networks) > 0 {
+			result.Studio = details.Networks[0].Name
+		}
+		result.Status = details.Status
+
+		// Fetch episodes per season
+		for s := 1; s <= details.NumberOfSeasons; s++ {
+			var seasonResp struct {
+				Episodes []struct {
+					EpisodeNumber int    `json:"episode_number"`
+					Name          string `json:"name"`
+					AirDate       string `json:"air_date"`
+					Runtime       int    `json:"runtime"`
+				} `json:"episodes"`
+			}
+
+			seasonPath := fmt.Sprintf("/tv/%d/season/%d", r.ID, s)
+			if err := t.get(seasonPath, url.Values{"api_key": {t.apiKey}, "language": {t.language}}, &seasonResp); err != nil {
+				continue
+			}
+
+			for _, ep := range seasonResp.Episodes {
+				result.Seasons[s] = append(result.Seasons[s], Episode{
+					Number:  ep.EpisodeNumber,
+					Title:   ep.Name,
+					AirDate: ep.AirDate,
+					Runtime: ep.Runtime,
+				})
+			}
+		}
+	}
+
+	return result, nil
+}
+
 // GetMovieImages returns poster, backdrop, and logo URLs.
 func (t *TMDBClient) GetMovieImages(tmdbID int) (poster, backdrop, logo string) {
 	var imgResp struct {
