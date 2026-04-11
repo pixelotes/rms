@@ -23,6 +23,17 @@ var imageSpecs = []struct {
 	{"logo.png", "logo"},
 }
 
+// MissingImages returns true if any expected artwork file is absent from dir.
+func MissingImages(dir string) bool {
+	for _, spec := range imageSpecs {
+		dest := filepath.Join(dir, spec.Name)
+		if _, err := os.Stat(dest); err != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // DownloadImages downloads poster, backdrop, and logo for a movie or show directory.
 // It skips images that already exist.
 func DownloadImages(dir string, posterURL, backdropURL, logoURL string) int {

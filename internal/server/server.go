@@ -11,16 +11,19 @@ import (
 	"github.com/gorilla/mux"
 
 	"raspberry-media-server/internal/config"
+	"raspberry-media-server/internal/media"
 )
 
 type Server struct {
 	config     *config.Config
 	httpServer *http.Server
 	router     *mux.Router
+	userData   *UserDataStore
 }
 
 func New(cfg *config.Config) *Server {
 	s := &Server{config: cfg}
+	s.userData = NewUserDataStore(cfg.App.UserdataPath)
 	s.router = mux.NewRouter()
 	if cfg.App.Debug {
 		s.router.Use(loggingMiddleware)
@@ -74,33 +77,65 @@ func (s *Server) registerRoutes() {
 	jf.HandleFunc("/Users/Public", s.jfUsersPublic).Methods("GET")
 	jf.HandleFunc("/Users/AuthenticateByName", s.jfAuthenticateByName).Methods("POST")
 	jf.HandleFunc("/Branding/Configuration", s.jfBrandingConfig).Methods("GET")
+	jf.HandleFunc("/QuickConnect/Enabled", func(w http.ResponseWriter, r *http.Request) {
+		respondJSON(w, http.StatusOK, false)
+	}).Methods("GET")
 	jf.HandleFunc("/QuickConnect/Initiate", func(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusOK, map[string]interface{}{"Error": "QuickConnect is not available"})
 	}).Methods("POST", "GET")
 
 	// Images - public (clients load these as direct URLs without auth headers)
+	// Some clients use lowercase "/items/" so register both variants.
 	jf.HandleFunc("/Items/{itemId}/Images/{imageType}", s.jfGetItemImage).Methods("GET", "HEAD")
 	jf.HandleFunc("/Items/{itemId}/Images/{imageType}/{imageIndex}", s.jfGetItemImage).Methods("GET", "HEAD")
+	jf.HandleFunc("/items/{itemId}/Images/{imageType}", s.jfGetItemImage).Methods("GET", "HEAD")
+	jf.HandleFunc("/items/{itemId}/Images/{imageType}/{imageIndex}", s.jfGetItemImage).Methods("GET", "HEAD")
+
+	// Streaming - public (media players like ExoPlayer/AVPlayer use bare URLs without auth headers)
+	jf.HandleFunc("/Videos/{itemId}/stream", s.jfVideoStream).Methods("GET", "HEAD")
+	jf.HandleFunc("/Videos/{itemId}/stream.{container}", s.jfVideoStream).Methods("GET", "HEAD")
+	jf.HandleFunc("/Audio/{itemId}/stream", s.jfVideoStream).Methods("GET", "HEAD")
+	jf.HandleFunc("/Audio/{itemId}/stream.{container}", s.jfVideoStream).Methods("GET", "HEAD")
+	jf.HandleFunc("/Videos/{itemId}/{sourceId}/Subtitles/{index}/{tick}/Stream.{format}", s.jfSubtitleStream).Methods("GET")
+	jf.HandleFunc("/Videos/{itemId}/{sourceId}/Subtitles/{index}/Stream.{format}", s.jfSubtitleStream).Methods("GET")
 
 	// Jellyfin protected endpoints
 	jfAuth := s.router.PathPrefix("").Subrouter()
 	jfAuth.Use(s.jellyfinAuthMiddleware)
 
-	// System
+	// System (register both cases — some clients use lowercase)
 	jfAuth.HandleFunc("/System/Info", s.jfSystemInfo).Methods("GET")
+	jfAuth.HandleFunc("/system/info", s.jfSystemInfo).Methods("GET")
+	jfAuth.HandleFunc("/System/Configuration/encoding", s.jfEncodingConfig).Methods("GET")
+	if s.jfVersionAtLeast(10, 11) {
+		jfAuth.HandleFunc("/System/Storage", s.jfSystemStorage).Methods("GET")
+	}
 
 	// Users & Items
 	jfAuth.HandleFunc("/UserViews", s.jfGetViews).Methods("GET")
 	jfAuth.HandleFunc("/Users/{userId}/Views", s.jfGetViews).Methods("GET")
+	jfAuth.HandleFunc("/Users/{userId}/Items/Latest", s.jfGetLatest).Methods("GET")
+	jfAuth.HandleFunc("/Users/{userId}/Items/Resume", s.jfGetResumeItems).Methods("GET")
 	jfAuth.HandleFunc("/Users/{userId}/Items", s.jfGetItems).Methods("GET")
+	jfAuth.HandleFunc("/Users/{userId}/Items/{itemId}/Intros", s.jfEmptyItems).Methods("GET")
+	jfAuth.HandleFunc("/Users/{userId}/Items/{itemId}/LocalTrailers", s.jfEmptyArray).Methods("GET")
+	jfAuth.HandleFunc("/Users/{userId}/Items/{itemId}/SpecialFeatures", s.jfEmptyArray).Methods("GET")
 	jfAuth.HandleFunc("/Users/{userId}/Items/{itemId}", s.jfGetItem).Methods("GET")
 	jfAuth.HandleFunc("/Users/Me", s.jfGetCurrentUser).Methods("GET")
+	jfAuth.HandleFunc("/Users/{userId}", s.jfGetUser).Methods("GET")
 	jfAuth.HandleFunc("/Items", s.jfGetItems).Methods("GET")
 
 	// Items sub-endpoints (must be before /Items/{itemId} catch-all)
 	jfAuth.HandleFunc("/Items/Latest", s.jfGetLatest).Methods("GET")
 	jfAuth.HandleFunc("/Items/Suggestions", s.jfEmptyItems).Methods("GET")
 	jfAuth.HandleFunc("/Items/Filters", s.jfGetFilters).Methods("GET")
+	jfAuth.HandleFunc("/Items/{itemId}/Similar", s.jfEmptyItems).Methods("GET")
+	jfAuth.HandleFunc("/Items/{itemId}/Intros", s.jfEmptyItems).Methods("GET")
+	jfAuth.HandleFunc("/Items/{itemId}/ThemeMedia", s.jfThemeMedia).Methods("GET")
+	jfAuth.HandleFunc("/Items/{itemId}/ThemeSongs", s.jfEmptyItems).Methods("GET")
+	jfAuth.HandleFunc("/Items/{itemId}/ThemeVideos", s.jfEmptyItems).Methods("GET")
+	jfAuth.HandleFunc("/Items/{itemId}/SpecialFeatures", s.jfEmptyArray).Methods("GET")
+	jfAuth.HandleFunc("/Items/{itemId}/LocalTrailers", s.jfEmptyArray).Methods("GET")
 	jfAuth.HandleFunc("/Items/{itemId}", s.jfGetItem).Methods("GET")
 
 	// TV Shows
@@ -110,34 +145,62 @@ func (s *Server) registerRoutes() {
 
 	// Playback
 	jfAuth.HandleFunc("/Items/{itemId}/PlaybackInfo", s.jfPlaybackInfo).Methods("POST", "GET")
-	jfAuth.HandleFunc("/Videos/{itemId}/stream", s.jfVideoStream).Methods("GET", "HEAD")
-	jfAuth.HandleFunc("/Videos/{itemId}/stream.{container}", s.jfVideoStream).Methods("GET", "HEAD")
-	jfAuth.HandleFunc("/Audio/{itemId}/stream", s.jfVideoStream).Methods("GET", "HEAD")
-	jfAuth.HandleFunc("/Audio/{itemId}/stream.{container}", s.jfVideoStream).Methods("GET", "HEAD")
 
-	// Subtitles (external delivery)
-	jfAuth.HandleFunc("/Videos/{itemId}/{sourceId}/Subtitles/{index}/{tick}/Stream.{format}", s.jfSubtitleStream).Methods("GET")
-	jfAuth.HandleFunc("/Videos/{itemId}/{sourceId}/Subtitles/{index}/Stream.{format}", s.jfSubtitleStream).Methods("GET")
-
-	// Session stubs
+	// Sessions
 	jfAuth.HandleFunc("/Sessions", s.jfSessionsStub).Methods("GET")
+	jfAuth.HandleFunc("/Sessions/Capabilities", s.jfSessionStub).Methods("POST")
 	jfAuth.HandleFunc("/Sessions/Capabilities/Full", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/Playing", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/Playing/Progress", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/Playing/Stopped", s.jfSessionStub).Methods("POST")
+	jfAuth.HandleFunc("/Sessions/Playing", s.jfReportPlayback).Methods("POST")
+	jfAuth.HandleFunc("/Sessions/Playing/Progress", s.jfReportPlayback).Methods("POST")
+	jfAuth.HandleFunc("/Sessions/Playing/Stopped", s.jfReportPlaybackStopped).Methods("POST")
+	jfAuth.HandleFunc("/Sessions/Playing/Ping", s.jfSessionStub).Methods("POST")
 
-	// Resume / Suggestions stubs
-	jfAuth.HandleFunc("/UserItems/Resume", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Items/Suggestions", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/PlayingItems/{itemId}", s.jfSessionStub).Methods("POST", "DELETE")
+	// Sessions (10.11+)
+	if s.jfVersionAtLeast(10, 11) {
+		jfAuth.HandleFunc("/Sessions/Playing/ReportStart", s.jfReportPlayback).Methods("POST")
+		jfAuth.HandleFunc("/Sessions/Playing/ReportProgress", s.jfReportPlayback).Methods("POST")
+		jfAuth.HandleFunc("/Sessions/Playing/ReportStopped", s.jfReportPlaybackStopped).Methods("POST")
+		jfAuth.HandleFunc("/Sessions/Logout", s.jfSessionStub).Methods("DELETE", "POST")
+	}
 
-	// User items stubs
-	jfAuth.HandleFunc("/Users/{userId}/Items/{itemId}/UserData", s.jfUserDataStub).Methods("POST")
-	jfAuth.HandleFunc("/Users/{userId}/PlayedItems/{itemId}", s.jfSessionStub).Methods("POST", "DELETE")
-	jfAuth.HandleFunc("/Users/{userId}/FavoriteItems/{itemId}", s.jfSessionStub).Methods("POST", "DELETE")
+	// Client log stub (Moonfin sends crash reports here)
+	jfAuth.HandleFunc("/ClientLog/Document", s.jfSessionStub).Methods("POST")
+
+	// Resume
+	jfAuth.HandleFunc("/UserItems/Resume", s.jfGetResumeItems).Methods("GET")
+
+	// User items state
+	jfAuth.HandleFunc("/Users/{userId}/Items/{itemId}/UserData", s.jfUpdateUserData).Methods("POST")
+	jfAuth.HandleFunc("/Users/{userId}/PlayedItems/{itemId}", s.jfTogglePlayed).Methods("POST", "DELETE")
+	jfAuth.HandleFunc("/Users/{userId}/FavoriteItems/{itemId}", s.jfToggleFavorite).Methods("POST", "DELETE")
+	jfAuth.HandleFunc("/PlayingItems/{itemId}", s.jfReportPlayback).Methods("POST", "DELETE")
+
+	// Search
+	jfAuth.HandleFunc("/Search/Hints", s.jfSearchHints).Methods("GET")
+
+	// Genres, Persons, Studios
+	jfAuth.HandleFunc("/Genres", s.jfGetGenres).Methods("GET")
+	jfAuth.HandleFunc("/Persons", s.jfEmptyItems).Methods("GET")
+	jfAuth.HandleFunc("/Studios", s.jfEmptyItems).Methods("GET")
+	jfAuth.HandleFunc("/Artists", s.jfEmptyItems).Methods("GET")
+
+	// Media segments (skip intro/credits)
+	jfAuth.HandleFunc("/MediaSegments/{itemId}", s.jfMediaSegments).Methods("GET")
+
+	// Cancel active transcoding
+	jfAuth.HandleFunc("/Videos/ActiveEncodings", s.jfSessionStub).Methods("DELETE")
 
 	// Display preferences stub
 	jfAuth.HandleFunc("/DisplayPreferences/{displayPrefsId}", s.jfDisplayPrefsStub).Methods("GET")
+
+	// LiveTv stub (Moonfin checks for live TV)
+	jfAuth.HandleFunc("/LiveTv/Programs/Recommended", s.jfEmptyItems).Methods("GET")
+
+	// Kodi SyncQueue plugin emulation (optional)
+	if s.config.App.KodiSyncQueue {
+		jf.HandleFunc("/Jellyfin.Plugin.KodiSyncQueue/GetPluginSettings", s.jfKodiSyncSettings).Methods("GET")
+		jfAuth.HandleFunc("/Jellyfin.Plugin.KodiSyncQueue/{userId}/GetItems", s.jfKodiSyncGetItems).Methods("GET")
+	}
 
 	// WebSocket stub (Jellyfin clients poll this constantly)
 	s.router.HandleFunc("/socket", func(w http.ResponseWriter, r *http.Request) {
@@ -155,18 +218,27 @@ func (s *Server) registerRoutes() {
 			log.Printf("[UNHANDLED] %s %s", r.Method, r.URL.String())
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("{}"))
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":"Not Found"}`))
 	})
 }
 
+// jfVersionAtLeast returns true if the configured Jellyfin version is >= major.minor.
+func (s *Server) jfVersionAtLeast(major, minor int) bool {
+	m, n := s.config.App.JellyfinMajorMinor()
+	return m > major || (m == major && n >= minor)
+}
+
 func (s *Server) Start() error {
+	media.PopulateIDStore(s.config.Libraries)
+	log.Printf("Item ID store populated for %d libraries", len(s.config.Libraries))
 	s.startAutoScan()
 	log.Printf("Starting server on port %d (UI enabled: %v)", s.config.App.Port, s.config.App.UIEnabled)
 	return s.httpServer.ListenAndServe()
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.userData.Shutdown()
 	return s.httpServer.Shutdown(ctx)
 }
 

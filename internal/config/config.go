@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -59,6 +61,8 @@ type AppConfig struct {
 	UIPassword      string `yaml:"ui_password"`
 	JWTSecret       string `yaml:"jwt_secret"`
 	JellyfinVersion string `yaml:"jellyfin_version"`
+	KodiSyncQueue   bool   `yaml:"kodi_sync_queue"`
+	UserdataPath    string `yaml:"userdata_path"`
 	Debug           bool   `yaml:"debug"`
 }
 
@@ -144,7 +148,7 @@ func (c *Config) setDefaults() {
 		c.App.JWTSecret = "change-me-in-production"
 	}
 	if c.App.JellyfinVersion == "" {
-		c.App.JellyfinVersion = "10.10.7"
+		c.App.JellyfinVersion = "10.11.0"
 	}
 	if len(c.Player.StreamStrategy) == 0 {
 		c.Player.StreamStrategy = []string{"direct", "remux", "transcode"}
@@ -215,6 +219,18 @@ func (c *Config) FindUser(username string) *User {
 		}
 	}
 	return nil
+}
+
+// JellyfinMajorMinor parses the configured jellyfin_version (e.g. "10.11.0")
+// and returns the major and minor components.
+func (a AppConfig) JellyfinMajorMinor() (int, int) {
+	parts := strings.SplitN(a.JellyfinVersion, ".", 3)
+	if len(parts) < 2 {
+		return 10, 11 // safe default
+	}
+	major, _ := strconv.Atoi(parts[0])
+	minor, _ := strconv.Atoi(parts[1])
+	return major, minor
 }
 
 func (c *Config) validate() error {
