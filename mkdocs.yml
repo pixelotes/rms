@@ -1,0 +1,47 @@
+site_name: Raspberry Media Server
+site_description: Lightweight, database-free Jellyfin-compatible media server for Raspberry Pi
+site_author: pixelotes
+
+theme:
+  name: material
+  palette:
+    scheme: slate
+    primary: deep purple
+    accent: amber
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+    - search.highlight
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - attr_list
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Configuration: getting-started/configuration.md
+    - Docker: getting-started/docker.md
+  - Features:
+    - Jellyfin Compatibility: features/jellyfin.md
+    - Crawlers: features/crawlers.md
+    - Web UI: features/webui.md
+  - API Reference:
+    - Native API: api/native.md
+    - Jellyfin API: api/jellyfin.md
+  - Advanced:
+    - Versioning: advanced/versioning.md
+    - Architecture: advanced/architecture.md
