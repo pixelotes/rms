@@ -19,11 +19,13 @@ type Server struct {
 	httpServer *http.Server
 	router     *mux.Router
 	userData   *UserDataStore
+	syncQueue  *SyncQueueStore
 }
 
 func New(cfg *config.Config) *Server {
 	s := &Server{config: cfg}
 	s.userData = NewUserDataStore(cfg.App.UserdataPath)
+	s.syncQueue = NewSyncQueueStore()
 	s.router = mux.NewRouter()
 	if cfg.App.Debug {
 		s.router.Use(loggingMiddleware)
@@ -67,6 +69,7 @@ func (s *Server) registerRoutes() {
 	protected.HandleFunc("/crawl/metadata", s.handleCrawlMetadata).Methods("POST")
 	protected.HandleFunc("/crawl/subtitles", s.handleCrawlSubtitles).Methods("POST")
 	protected.HandleFunc("/crawl/thumbnails", s.handleCrawlThumbnails).Methods("POST")
+	protected.HandleFunc("/library/rescan", s.handleRescan).Methods("POST")
 
 	// === Jellyfin-Compatible API ===
 	jf := s.router.PathPrefix("").Subrouter()
@@ -130,6 +133,7 @@ func (s *Server) registerRoutes() {
 	jfAuth.HandleFunc("/Items/Suggestions", s.jfEmptyItems).Methods("GET")
 	jfAuth.HandleFunc("/Items/Filters", s.jfGetFilters).Methods("GET")
 	jfAuth.HandleFunc("/Items/{itemId}/Similar", s.jfEmptyItems).Methods("GET")
+	jfAuth.HandleFunc("/Items/{itemId}/Ancestors", s.jfGetAncestors).Methods("GET")
 	jfAuth.HandleFunc("/Items/{itemId}/Intros", s.jfEmptyItems).Methods("GET")
 	jfAuth.HandleFunc("/Items/{itemId}/ThemeMedia", s.jfThemeMedia).Methods("GET")
 	jfAuth.HandleFunc("/Items/{itemId}/ThemeSongs", s.jfEmptyItems).Methods("GET")
@@ -230,11 +234,28 @@ func (s *Server) jfVersionAtLeast(major, minor int) bool {
 }
 
 func (s *Server) Start() error {
-	media.PopulateIDStore(s.config.Libraries)
-	log.Printf("Item ID store populated for %d libraries", len(s.config.Libraries))
+	added := media.PopulateIDStore(s.config.Libraries)
+	log.Printf("Item ID store populated for %d libraries (%d items registered)", len(s.config.Libraries), len(added))
+	// Note: initial boot population is NOT pushed to the Kodi sync queue.
+	// Kodi will see an empty queue on first connect and perform a full library
+	// scan (its default behavior). Only subsequent changes (rescans, auto-scans)
+	// are recorded as deltas for incremental sync.
 	s.startAutoScan()
+	s.runBootScan()
 	log.Printf("Starting server on port %d (UI enabled: %v)", s.config.App.Port, s.config.App.UIEnabled)
 	return s.httpServer.ListenAndServe()
+}
+
+// runBootScan triggers an auto-scan in the background on startup if enabled.
+// Runs in a goroutine to avoid delaying the HTTP listener.
+func (s *Server) runBootScan() {
+	if !s.config.Crawlers.AutoScan.Enabled {
+		return
+	}
+	go func() {
+		log.Println("Boot scan: starting in background...")
+		s.runAutoScan()
+	}()
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {

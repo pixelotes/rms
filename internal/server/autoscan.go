@@ -2,10 +2,12 @@ package server
 
 import (
 	"log"
+	"net/http"
 	"os/exec"
 	"time"
 
 	"raspberry-media-server/internal/config"
+	"raspberry-media-server/internal/media"
 )
 
 func (s *Server) startAutoScan() {
@@ -88,7 +90,22 @@ func (s *Server) runAutoScan() {
 		runCrawler("metacrawler", configPath, []string{"--thumbnails"})
 	}
 
+	s.rescanLibraries()
 	log.Println("Auto-scan: complete")
+}
+
+func (s *Server) rescanLibraries() {
+	added := media.PopulateIDStore(s.config.Libraries)
+	log.Printf("Library rescan: ID store refreshed for %d libraries (%d new items)",
+		len(s.config.Libraries), len(added))
+	if s.config.App.KodiSyncQueue {
+		s.syncQueue.RecordAdded(added)
+	}
+}
+
+func (s *Server) handleRescan(w http.ResponseWriter, r *http.Request) {
+	s.rescanLibraries()
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func runCrawler(name, configPath string, extraArgs []string) {

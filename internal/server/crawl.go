@@ -5,16 +5,11 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
-	"sync"
 
 	"github.com/gorilla/mux"
 
 	"raspberry-media-server/internal/media"
 )
-
-// Limit concurrent ffprobe processes to avoid OOM on low-memory devices.
-var probeSem = make(chan struct{}, 2)
-var probeCache sync.Map
 
 type crawlRequest struct {
 	Path string `json:"path"`
@@ -42,19 +37,12 @@ func (s *Server) handleDuration(w http.ResponseWriter, r *http.Request) {
 			minutes = nfo.Runtime
 		}
 	}
-	// Fallback to ffprobe with concurrency limit and caching
+	// Fallback to ffprobe (cached + concurrency-limited inside media.ProbeDuration)
 	if minutes == 0 {
-		if cached, ok := probeCache.Load(filePath); ok {
-			minutes = cached.(int)
-		} else {
-			probeSem <- struct{}{}
-			secs := media.ProbeDuration(filePath)
-			<-probeSem
-			if secs > 0 {
-				minutes = int(secs) / 60
-				probeCache.Store(filePath, minutes)
-				media.UpdateEpisodeRuntime(filePath, minutes)
-			}
+		secs := media.ProbeDuration(filePath)
+		if secs > 0 {
+			minutes = int(secs) / 60
+			media.UpdateEpisodeRuntime(filePath, minutes)
 		}
 	}
 

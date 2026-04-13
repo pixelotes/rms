@@ -214,6 +214,59 @@ func (s *Server) jfGetItem(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, item)
 }
 
+// --- Ancestors ---
+
+// jfGetAncestors returns the chain of parent items from the library root down
+// to (but not including) the requested item. Kodi uses this to reconstruct
+// Series → Season → Episode hierarchies.
+func (s *Server) jfGetAncestors(w http.ResponseWriter, r *http.Request) {
+	libs := s.librariesForRequest(r)
+	itemID := mux.Vars(r)["itemId"]
+
+	path, err := media.ItemPath(itemID)
+	if err != nil {
+		respondJSON(w, http.StatusOK, []interface{}{})
+		return
+	}
+	if !media.IsPathAllowed(path, libs) {
+		respondError(w, http.StatusForbidden, "Access denied")
+		return
+	}
+
+	libIdx := findLibraryIndex(path, libs)
+	if libIdx < 0 {
+		respondJSON(w, http.StatusOK, []interface{}{})
+		return
+	}
+	libPath, _ := filepath.Abs(libs[libIdx].Path)
+
+	ancestors := make([]map[string]interface{}, 0)
+	current := filepath.Dir(path)
+	for {
+		abs, _ := filepath.Abs(current)
+		if !strings.HasPrefix(abs, libPath) {
+			break
+		}
+		if abs == libPath {
+			ancestors = append(ancestors, map[string]interface{}{
+				"Name":     libs[libIdx].FriendlyName,
+				"Id":       libraryID(libIdx),
+				"Type":     "CollectionFolder",
+				"IsFolder": true,
+			})
+			break
+		}
+		info, err := os.Stat(current)
+		if err != nil {
+			break
+		}
+		ancestors = append(ancestors, s.buildJellyfinItem(current, info, libIdx, libs))
+		current = filepath.Dir(current)
+	}
+
+	respondJSON(w, http.StatusOK, ancestors)
+}
+
 // --- Images ---
 
 func (s *Server) jfGetItemImage(w http.ResponseWriter, r *http.Request) {
