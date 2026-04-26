@@ -203,18 +203,17 @@ document.addEventListener('DOMContentLoaded', () => {
                     for (const sub of (subs || [])) {
                         const subResp = await fetchWithAuth(`/api/v1/subtitles/${encodeURIComponent(safePath)}?lang=${sub.language}`);
                         if (subResp.ok) {
-                            const subBlob = await subResp.blob();
-                            const blobUrl = URL.createObjectURL(subBlob);
-                            const trackEl = player.addRemoteTextTrack({
-                                kind: 'subtitles',
-                                src: blobUrl,
-                                srclang: sub.language,
+                            const vttText = await subResp.text();
+                            const entry = {
+                                language: sub.language,
                                 label: sub.label,
-                                default: sub.language === 'en'
-                            }, false);
-                            const entry = { language: sub.language, blobUrl, trackEl, origCues: null };
+                                default: sub.language === 'en',
+                                vttText,
+                                blobUrl: null,
+                                trackEl: null
+                            };
+                            mountSubtitleTrack(entry);
                             state.subs.push(entry);
-                            trackEl.addEventListener('load', () => captureOrigCues(entry));
                         }
                     }
                     if (state.subs.length) $('sub-offset-bar').classList.add('visible');
@@ -243,30 +242,88 @@ document.addEventListener('DOMContentLoaded', () => {
         $('sub-offset-bar').classList.remove('visible');
     }
 
-    // --- Subtitle offset (mutates cue start/end in place; no track rebuild) ---
+    // --- Subtitle offset (rebuilds VTT client-side so browsers refresh reliably) ---
     const subOffsetSlider = $('sub-offset-slider'), subOffsetValue = $('sub-offset-value');
 
-    function captureOrigCues(entry) {
-        if (entry.origCues) return;
-        const cues = entry.trackEl.track?.cues;
-        if (!cues || cues.length === 0) return;
-        entry.origCues = [...cues].map(c => ({ cue: c, start: c.startTime, end: c.endTime }));
-        if (state.subtitleOffset !== 0) applyOffsetToEntry(entry, state.subtitleOffset);
+    function parseVttTimestamp(ts) {
+        const match = /^(\d{2}):(\d{2}):(\d{2})\.(\d{3})$/.exec(ts.trim());
+        if (!match) return null;
+        const [, hh, mm, ss, ms] = match;
+        return (((Number(hh) * 60) + Number(mm)) * 60 + Number(ss)) + (Number(ms) / 1000);
     }
-    function applyOffsetToEntry(entry, offset) {
-        if (!entry.origCues) return;
-        for (const { cue, start, end } of entry.origCues) {
-            const ns = Math.max(0, start + offset);
-            const ne = Math.max(0, end + offset);
-            if (ns <= cue.endTime) { cue.startTime = ns; cue.endTime = ne; }
-            else { cue.endTime = ne; cue.startTime = ns; }
+
+    function formatVttTimestamp(totalSeconds) {
+        const clamped = Math.max(0, totalSeconds);
+        let wholeMillis = Math.round(clamped * 1000);
+        const hours = Math.floor(wholeMillis / 3600000);
+        wholeMillis -= hours * 3600000;
+        const minutes = Math.floor(wholeMillis / 60000);
+        wholeMillis -= minutes * 60000;
+        const seconds = Math.floor(wholeMillis / 1000);
+        const millis = wholeMillis - (seconds * 1000);
+        return [
+            String(hours).padStart(2, '0'),
+            String(minutes).padStart(2, '0'),
+            `${String(seconds).padStart(2, '0')}.${String(millis).padStart(3, '0')}`
+        ].join(':');
+    }
+
+    function shiftVttText(vttText, offset) {
+        return vttText.replace(
+            /^(\d{2}:\d{2}:\d{2}\.\d{3})\s+-->\s+(\d{2}:\d{2}:\d{2}\.\d{3})(.*)$/gm,
+            (_, startTs, endTs, settings = '') => {
+                const start = parseVttTimestamp(startTs);
+                const end = parseVttTimestamp(endTs);
+                if (start == null || end == null) return _;
+                const shiftedStart = Math.max(0, start + offset);
+                const shiftedEnd = Math.max(shiftedStart, end + offset);
+                return `${formatVttTimestamp(shiftedStart)} --> ${formatVttTimestamp(shiftedEnd)}${settings}`;
+            }
+        );
+    }
+
+    function refreshVisibleSubtitle(track) {
+        if (!track || track.mode !== 'showing') return;
+        const originalMode = track.mode;
+        track.mode = 'hidden';
+        requestAnimationFrame(() => {
+            track.mode = originalMode;
+            if (player.paused()) {
+                const now = player.currentTime();
+                if (Number.isFinite(now)) player.currentTime(now);
+            }
+        });
+    }
+
+    function mountSubtitleTrack(entry) {
+        const previousMode = entry.trackEl?.track?.mode || (entry.default ? 'showing' : 'disabled');
+        if (entry.trackEl) {
+            try { player.removeRemoteTextTrack(entry.trackEl); } catch {}
+        }
+        if (entry.blobUrl) URL.revokeObjectURL(entry.blobUrl);
+
+        const shiftedText = shiftVttText(entry.vttText, state.subtitleOffset);
+        entry.blobUrl = URL.createObjectURL(new Blob([shiftedText], { type: 'text/vtt' }));
+        entry.trackEl = player.addRemoteTextTrack({
+            kind: 'subtitles',
+            src: entry.blobUrl,
+            srclang: entry.language,
+            label: entry.label,
+            default: entry.default
+        }, false);
+
+        const track = entry.trackEl.track;
+        if (track) {
+            track.mode = previousMode;
+            entry.trackEl.addEventListener('load', () => refreshVisibleSubtitle(track), { once: true });
         }
     }
+
     function setSubtitleOffset(val) {
         state.subtitleOffset = Math.round(Math.max(-10, Math.min(10, val)) * 10) / 10;
         subOffsetSlider.value = state.subtitleOffset;
         subOffsetValue.textContent = `${state.subtitleOffset >= 0 ? '+' : ''}${state.subtitleOffset.toFixed(1)} s`;
-        for (const sub of state.subs) applyOffsetToEntry(sub, state.subtitleOffset);
+        for (const sub of state.subs) mountSubtitleTrack(sub);
     }
     subOffsetSlider.addEventListener('input', e => setSubtitleOffset(Number.parseFloat(e.target.value)));
     $('sub-offset-minus').addEventListener('click', () => setSubtitleOffset(state.subtitleOffset - 0.1));
