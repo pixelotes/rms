@@ -20,7 +20,7 @@ func (s *Server) jfGetViews(w http.ResponseWriter, r *http.Request) {
 	items := make([]map[string]interface{}, 0, len(libs))
 	for i, lib := range libs {
 		collectionType := "movies"
-		if lib.ContentType == "tvseries" {
+		if lib.ContentType == "tvseries" || lib.ContentType == "anime" {
 			collectionType = "tvshows"
 		}
 		items = append(items, map[string]interface{}{
@@ -178,7 +178,7 @@ func (s *Server) jfGetItem(w http.ResponseWriter, r *http.Request) {
 	if idx, ok := s.parseLibraryID(itemID, libs); ok {
 		lib := libs[idx]
 		collectionType := "movies"
-		if lib.ContentType == "tvseries" {
+		if lib.ContentType == "tvseries" || lib.ContentType == "anime" {
 			collectionType = "tvshows"
 		}
 		respondJSON(w, http.StatusOK, map[string]interface{}{

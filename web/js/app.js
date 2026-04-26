@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-    const state = { sessionToken: '', currentPath: '', libraries: [], streamStrategies: ['direct', 'remux', 'transcode'], currentStrategyIndex: 0, currentBg: null };
+    const state = { sessionToken: '', currentPath: '', libraries: [], streamStrategies: ['direct', 'remux', 'transcode'], currentStrategyIndex: 0, currentBg: null, subtitleOffset: 0, subs: [], currentVideoPath: null, nextEpisodePath: null, nextEpisodeTimer: null };
     const $ = id => document.getElementById(id);
     const loginScreen = $('login-screen'), appContainer = $('app-container'), loginForm = $('login-form');
     const fileBrowser = $('file-browser'), videoPlayerModal = $('video-player-modal');
@@ -169,7 +169,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function playVideo(path) {
         state.currentStrategyIndex = 0;
         videoPlayerModal.style.display = 'flex';
-        loadVideo(path);
+        player.off('error');
         player.on('error', () => {
             if (player.error()?.code === 4) {
                 state.currentStrategyIndex++;
@@ -177,22 +177,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 else { hideLoading(); toast('All strategies failed'); }
             }
         });
+        loadVideo(path);
     }
 
     async function loadVideo(path) {
         const strategy = state.streamStrategies[state.currentStrategyIndex];
         const safePath = path.startsWith('/') ? path.substring(1) : path;
+        state.currentVideoPath = path;
+        hideNextEpisodePrompt();
         showLoading(`Loading (${strategy})...`);
         try {
-            // Stream directly via URL with auth token as query param (no blob download)
             const videoUrl = `/api/v1/stream/${encodeURIComponent(safePath)}?strategy=${strategy}&token=${encodeURIComponent(state.sessionToken)}`;
             player.src({ src: videoUrl, type: 'video/mp4' });
 
-            // Clear old subtitles
-            const tracks = player.remoteTextTracks();
-            for (let i = tracks.length - 1; i >= 0; i--) player.removeRemoteTextTrack(tracks[i]);
+            clearSubtitleTracks();
+            state.subtitleOffset = 0;
+            subOffsetSlider.value = 0;
+            subOffsetValue.textContent = '+0.0 s';
+            $('sub-offset-bar').classList.remove('visible');
 
-            // Load all available subtitles
             try {
                 const subsResp = await fetchWithAuth(`/api/v1/subtitles-list/${encodeURIComponent(safePath)}`);
                 if (subsResp.ok) {
@@ -201,19 +204,32 @@ document.addEventListener('DOMContentLoaded', () => {
                         const subResp = await fetchWithAuth(`/api/v1/subtitles/${encodeURIComponent(safePath)}?lang=${sub.language}`);
                         if (subResp.ok) {
                             const subBlob = await subResp.blob();
-                            player.addRemoteTextTrack({
+                            const blobUrl = URL.createObjectURL(subBlob);
+                            const trackEl = player.addRemoteTextTrack({
                                 kind: 'subtitles',
-                                src: URL.createObjectURL(subBlob),
+                                src: blobUrl,
                                 srclang: sub.language,
                                 label: sub.label,
                                 default: sub.language === 'en'
                             }, false);
+                            const entry = { language: sub.language, blobUrl, trackEl, origCues: null };
+                            state.subs.push(entry);
+                            trackEl.addEventListener('load', () => captureOrigCues(entry));
                         }
                     }
+                    if (state.subs.length) $('sub-offset-bar').classList.add('visible');
                 }
             } catch {}
             hideLoading(); player.play();
         } catch { player.error({ code: 4, message: 'Failed' }); }
+    }
+
+    function clearSubtitleTracks() {
+        for (const sub of state.subs) {
+            try { player.removeRemoteTextTrack(sub.trackEl); } catch {}
+            URL.revokeObjectURL(sub.blobUrl);
+        }
+        state.subs = [];
     }
 
     function closeModal() {
@@ -221,12 +237,96 @@ document.addEventListener('DOMContentLoaded', () => {
         const src = player.currentSrc();
         if (src?.startsWith('blob:')) URL.revokeObjectURL(src);
         player.src('');
-        const tracks = player.remoteTextTracks();
-        for (let i = tracks.length - 1; i >= 0; i--) {
-            if (tracks[i].src?.startsWith('blob:')) URL.revokeObjectURL(tracks[i].src);
-            player.removeRemoteTextTrack(tracks[i]);
+        clearSubtitleTracks();
+        state.currentVideoPath = null;
+        hideNextEpisodePrompt();
+        $('sub-offset-bar').classList.remove('visible');
+    }
+
+    // --- Subtitle offset (mutates cue start/end in place; no track rebuild) ---
+    const subOffsetSlider = $('sub-offset-slider'), subOffsetValue = $('sub-offset-value');
+
+    function captureOrigCues(entry) {
+        if (entry.origCues) return;
+        const cues = entry.trackEl.track?.cues;
+        if (!cues || cues.length === 0) return;
+        entry.origCues = [...cues].map(c => ({ cue: c, start: c.startTime, end: c.endTime }));
+        if (state.subtitleOffset !== 0) applyOffsetToEntry(entry, state.subtitleOffset);
+    }
+    function applyOffsetToEntry(entry, offset) {
+        if (!entry.origCues) return;
+        for (const { cue, start, end } of entry.origCues) {
+            const ns = Math.max(0, start + offset);
+            const ne = Math.max(0, end + offset);
+            if (ns <= cue.endTime) { cue.startTime = ns; cue.endTime = ne; }
+            else { cue.endTime = ne; cue.startTime = ns; }
         }
     }
+    function setSubtitleOffset(val) {
+        state.subtitleOffset = Math.round(Math.max(-10, Math.min(10, val)) * 10) / 10;
+        subOffsetSlider.value = state.subtitleOffset;
+        subOffsetValue.textContent = `${state.subtitleOffset >= 0 ? '+' : ''}${state.subtitleOffset.toFixed(1)} s`;
+        for (const sub of state.subs) applyOffsetToEntry(sub, state.subtitleOffset);
+    }
+    subOffsetSlider.addEventListener('input', e => setSubtitleOffset(Number.parseFloat(e.target.value)));
+    $('sub-offset-minus').addEventListener('click', () => setSubtitleOffset(state.subtitleOffset - 0.1));
+    $('sub-offset-plus').addEventListener('click', () => setSubtitleOffset(state.subtitleOffset + 0.1));
+    $('sub-offset-reset').addEventListener('click', () => setSubtitleOffset(0));
+
+    // --- Next Episode ---
+    const VIDEO_EXTS = ['.mkv', '.mp4', '.avi', '.m4v', '.mov', '.webm'];
+    const NEXT_EP_COUNTDOWN = 10;
+    const nextEpPrompt = $('next-ep-prompt'), nextEpTitle = $('next-ep-title'), nextEpCountdown = $('next-ep-countdown');
+
+    async function findNextEpisode(currentPath) {
+        const parent = currentPath.substring(0, currentPath.lastIndexOf('/'));
+        if (!parent) return null;
+        try {
+            const resp = await fetchWithAuth(`/api/v1/browse?path=${encodeURIComponent(parent)}`);
+            if (!resp.ok) return null;
+            const data = await resp.json();
+            const videos = (data.items || [])
+                .filter(i => !i.is_dir && VIDEO_EXTS.some(ext => i.name.toLowerCase().endsWith(ext)))
+                .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+            const idx = videos.findIndex(v => v.path === currentPath);
+            if (idx === -1 || idx === videos.length - 1) return null;
+            return videos[idx + 1];
+        } catch { return null; }
+    }
+    function hideNextEpisodePrompt() {
+        nextEpPrompt.classList.remove('visible');
+        if (state.nextEpisodeTimer) { clearInterval(state.nextEpisodeTimer); state.nextEpisodeTimer = null; }
+        state.nextEpisodePath = null;
+    }
+    function showNextEpisodePrompt(next) {
+        state.nextEpisodePath = next.path;
+        nextEpTitle.textContent = next.friendly_name || next.name;
+        let remaining = NEXT_EP_COUNTDOWN;
+        nextEpCountdown.textContent = remaining;
+        nextEpPrompt.classList.add('visible');
+        state.nextEpisodeTimer = setInterval(() => {
+            remaining--;
+            nextEpCountdown.textContent = remaining;
+            if (remaining <= 0) {
+                clearInterval(state.nextEpisodeTimer);
+                state.nextEpisodeTimer = null;
+                const path = state.nextEpisodePath;
+                hideNextEpisodePrompt();
+                if (path) playVideo(path);
+            }
+        }, 1000);
+    }
+    player.on('ended', async () => {
+        if (!state.currentVideoPath) return;
+        const next = await findNextEpisode(state.currentVideoPath);
+        if (next) showNextEpisodePrompt(next);
+    });
+    $('next-ep-play').addEventListener('click', () => {
+        const path = state.nextEpisodePath;
+        hideNextEpisodePrompt();
+        if (path) playVideo(path);
+    });
+    $('next-ep-cancel').addEventListener('click', hideNextEpisodePrompt);
 
     // Events
     fileBrowser.addEventListener('click', e => {

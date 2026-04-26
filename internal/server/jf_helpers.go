@@ -173,7 +173,8 @@ func (s *Server) buildJellyfinItem(path string, info os.FileInfo, libIndex int, 
 func (s *Server) buildFolderItem(path, name, id string, libIndex int, libs []config.Library) map[string]interface{} {
 	itemType := "Movie"
 	if libIndex >= 0 && libIndex < len(libs) {
-		if libs[libIndex].ContentType == "tvseries" {
+		ct := libs[libIndex].ContentType
+		if ct == "tvseries" || ct == "anime" {
 			if isSeasonDir(name) {
 				itemType = "Season"
 			} else {

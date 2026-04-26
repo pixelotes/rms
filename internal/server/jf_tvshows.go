@@ -28,8 +28,12 @@ func (s *Server) jfGetSeasons(w http.ResponseWriter, r *http.Request) {
 	}
 
 	seasons := make([]map[string]interface{}, 0)
+	hasRootVideo := false
 	for _, e := range entries {
 		if !e.IsDir() {
+			if media.IsVideoFile(e.Name()) {
+				hasRootVideo = true
+			}
 			continue
 		}
 		name := e.Name()
@@ -52,6 +56,23 @@ func (s *Server) jfGetSeasons(w http.ResponseWriter, r *http.Request) {
 			"ImageTags":   s.imageTagsForDir(seasonPath),
 			"ParentId":    showID,
 			"UserData":    defaultUserData(seasonID),
+		})
+	}
+
+	// Flat layout: episodes live directly in the show root. Synthesize "Season 1"
+	// so clients that require a Season level (Streamyfin et al.) can browse them.
+	if len(seasons) == 0 && hasRootVideo {
+		seasons = append(seasons, map[string]interface{}{
+			"Name":        "Season 1",
+			"Id":          showID,
+			"Type":        "Season",
+			"IndexNumber": 1,
+			"SeriesId":    showID,
+			"SeriesName":  filepath.Base(showPath),
+			"IsFolder":    true,
+			"ImageTags":   s.imageTagsForDir(showPath),
+			"ParentId":    showID,
+			"UserData":    defaultUserData(showID),
 		})
 	}
 
@@ -122,7 +143,11 @@ func (s *Server) collectEpisodes(dir string, showID string, showPath string, epi
 		return
 	}
 
+	baseLower := strings.ToLower(filepath.Base(dir))
 	seasonNum := extractSeasonNumber(filepath.Base(dir))
+	if seasonNum == 0 && baseLower != "specials" && baseLower != "extras" {
+		seasonNum = 1
+	}
 
 	for _, e := range entries {
 		name := e.Name()

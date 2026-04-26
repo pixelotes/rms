@@ -116,6 +116,29 @@
         .strategy-indicator { position: fixed; top: 20px; right: 20px; background: #1a1a1a; color: #aaa; padding: 8px 14px; border-radius: 8px; font-size: 12px; z-index: 1000; display: none; border: 1px solid #333; }
         .strategy-indicator.show { display: block; animation: slideIn 0.3s ease-out; }
 
+        /* --- Subtitle Offset Bar --- */
+        #sub-offset-bar { display: none; align-items: center; gap: 10px; padding: 8px 12px; margin-top: 8px; background: #141414; border: 1px solid #222; border-radius: 8px; color: #ccc; font-size: 13px; flex-wrap: wrap; }
+        #sub-offset-bar.visible { display: flex; }
+        #sub-offset-bar .sub-offset-row { display: inline-flex; align-items: center; gap: 8px; flex: 1; min-width: 200px; }
+        #sub-offset-bar .sub-offset-label { color: #bbb; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+        #sub-offset-bar .sub-offset-label svg { width: 14px; height: 14px; }
+        #sub-offset-slider { flex: 1; accent-color: #c62828; min-width: 100px; }
+        #sub-offset-bar .sub-offset-btn { padding: 4px 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #ccc; cursor: pointer; font-size: 13px; font-weight: 600; min-width: 30px; }
+        #sub-offset-bar .sub-offset-btn:hover { background: #222; color: #fff; }
+        #sub-offset-value { min-width: 58px; text-align: center; color: #fff; font-variant-numeric: tabular-nums; font-size: 12px; }
+
+        /* --- Next Episode Prompt --- */
+        #next-ep-prompt { display: none; position: absolute; right: 16px; bottom: 72px; background: rgba(20,20,20,0.95); border: 1px solid #333; border-radius: 10px; padding: 14px 16px; min-width: 260px; max-width: 360px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); z-index: 5; }
+        #next-ep-prompt.visible { display: block; animation: slideIn 0.3s ease-out; }
+        #next-ep-prompt .next-ep-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+        #next-ep-prompt .next-ep-title { font-size: 14px; color: #fff; margin-bottom: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        #next-ep-prompt .next-ep-actions { display: flex; gap: 8px; }
+        #next-ep-prompt button { flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid #333; background: #1a1a1a; color: #ddd; font-size: 13px; font-weight: 600; cursor: pointer; }
+        #next-ep-prompt button.primary { background: #c62828; border-color: #c62828; color: #fff; }
+        #next-ep-prompt button.primary:hover { background: #e53935; }
+        #next-ep-prompt button:hover { background: #222; }
+        #next-ep-prompt .next-ep-countdown { font-variant-numeric: tabular-nums; }
+
     </style>
 </head>
 <body>
@@ -181,6 +204,29 @@
         <div class="modal-content">
             <span class="modal-close">&times;</span>
             <video id="video-player" class="video-js vjs-big-play-centered vjs-fluid" controls preload="auto" data-setup='{"fluid": true}'></video>
+            <div id="sub-offset-bar">
+                <div class="sub-offset-row">
+                    <span class="sub-offset-label">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h2m2 0h6"/></svg>
+                        Subtitle delay
+                    </span>
+                    <span id="sub-offset-value">+0.0 s</span>
+                </div>
+                <div class="sub-offset-row">
+                    <button class="sub-offset-btn" id="sub-offset-minus" title="-0.1s">−</button>
+                    <input type="range" id="sub-offset-slider" min="-10" max="10" step="0.1" value="0">
+                    <button class="sub-offset-btn" id="sub-offset-plus" title="+0.1s">+</button>
+                    <button class="sub-offset-btn" id="sub-offset-reset" title="Reset">⟲</button>
+                </div>
+            </div>
+            <div id="next-ep-prompt">
+                <div class="next-ep-label">Up next in <span class="next-ep-countdown" id="next-ep-countdown">10</span>s</div>
+                <div class="next-ep-title" id="next-ep-title"></div>
+                <div class="next-ep-actions">
+                    <button id="next-ep-cancel">Cancel</button>
+                    <button id="next-ep-play" class="primary">Play now</button>
+                </div>
+            </div>
         </div>
     </div>
 
