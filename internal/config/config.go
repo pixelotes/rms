@@ -168,16 +168,12 @@ func (c *Config) setDefaults() {
 }
 
 // AuthenticateUser validates credentials and returns the user.
-// Falls back to the default "rms" user with ui_password if no users are configured.
+// The built-in "rms" user with ui_password is always accepted and has access
+// to all libraries, even when additional users are configured in YAML.
 func (c *Config) AuthenticateUser(username, password string) *User {
-	if len(c.Users) == 0 {
-		// Fallback: single default user with access to all libraries
-		if password == c.App.UIPassword {
-			return &User{Username: "rms", Password: c.App.UIPassword}
-		}
-		return nil
+	if username == "rms" && c.App.UIPassword != "" && password == c.App.UIPassword {
+		return &User{Username: "rms", Password: c.App.UIPassword}
 	}
-
 	for _, u := range c.Users {
 		if u.Username == username && u.Password == password {
 			return &u
@@ -187,8 +183,12 @@ func (c *Config) AuthenticateUser(username, password string) *User {
 }
 
 // LibrariesForUser returns the libraries accessible to a user.
-// Empty Libraries list means access to all.
+// Empty Libraries list means access to all. The built-in "rms" user always
+// sees everything.
 func (c *Config) LibrariesForUser(username string) []Library {
+	if username == "rms" {
+		return c.Libraries
+	}
 	user := c.FindUser(username)
 	if user == nil || len(user.Libraries) == 0 {
 		return c.Libraries
@@ -208,9 +208,10 @@ func (c *Config) LibrariesForUser(username string) []Library {
 	return libs
 }
 
-// FindUser returns a user by username, or nil.
+// FindUser returns a user by username, or nil. The built-in "rms" admin is
+// always resolvable.
 func (c *Config) FindUser(username string) *User {
-	if len(c.Users) == 0 {
+	if username == "rms" {
 		return &User{Username: "rms"}
 	}
 	for _, u := range c.Users {

@@ -127,6 +127,24 @@
         #sub-offset-bar .sub-offset-btn:hover { background: #222; color: #fff; }
         #sub-offset-value { min-width: 58px; text-align: center; color: #fff; font-variant-numeric: tabular-nums; font-size: 12px; }
 
+        /* --- Settings Modal --- */
+        .icon-btn { background: #161616; border: 1px solid #333; border-radius: 8px; color: #ccc; width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: all 0.2s; }
+        .icon-btn:hover { background: #222; color: #fff; border-color: #555; }
+        .icon-btn svg { width: 18px; height: 18px; }
+        .settings-content { background: #141414; border: 1px solid #2a2a2a; border-radius: 12px; padding: 22px 24px 24px; width: 92%; max-width: 460px; max-height: 88vh; overflow-y: auto; position: relative; }
+        .settings-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+        .settings-header h3 { color: #fff; font-size: 17px; font-weight: 600; }
+        .settings-header .modal-close { position: static; font-size: 24px; }
+        .settings-section { padding: 12px 0; border-top: 1px solid #222; }
+        .settings-section:first-of-type { border-top: none; padding-top: 0; }
+        .settings-section-title { color: #aaa; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+        .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; font-size: 13px; color: #ccc; }
+        .settings-row select, .settings-row input[type="color"] { background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #eee; padding: 6px 8px; font-size: 13px; min-width: 160px; }
+        .settings-row input[type="color"] { padding: 2px; height: 30px; min-width: 60px; cursor: pointer; }
+        .settings-hint { font-size: 11px; color: #777; margin-top: 6px; }
+        .sub-preview { margin-top: 12px; padding: 18px 12px; background: linear-gradient(135deg, #1a2a45 0%, #2a1a35 100%); border-radius: 8px; text-align: center; min-height: 64px; display: flex; align-items: center; justify-content: center; }
+        .sub-preview span { display: inline-block; padding: 4px 8px; }
+
         /* --- Next Episode Prompt --- */
         #next-ep-prompt { display: none; position: absolute; right: 16px; bottom: 72px; background: rgba(20,20,20,0.95); border: 1px solid #333; border-radius: 10px; padding: 14px 16px; min-width: 260px; max-width: 360px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); z-index: 5; }
         #next-ep-prompt.visible { display: block; animation: slideIn 0.3s ease-out; }
@@ -148,7 +166,8 @@
             <form id="login-form">
                 <span class="logo-icon">&#127827;</span>
                 <h2>Raspberry Media Server</h2>
-                <input type="password" id="password-input" placeholder="Password" required>
+                <input type="text" id="username-input" placeholder="Username" value="rms" autocomplete="username" required>
+                <input type="password" id="password-input" placeholder="Password" autocomplete="current-password" required>
                 <button type="submit">Sign In</button>
                 <p id="login-error"></p>
             </form>
@@ -162,6 +181,9 @@
                         RMS
                     </div>
                     <input type="text" id="search-input" placeholder="Search...">
+                    <button id="btn-settings" class="icon-btn" title="Settings">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    </button>
                 </div>
                 <div id="breadcrumb"></div>
             </header>
@@ -226,6 +248,73 @@
                     <button id="next-ep-cancel">Cancel</button>
                     <button id="next-ep-play" class="primary">Play now</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="settings-modal" class="modal-backdrop">
+        <div class="settings-content">
+            <div class="settings-header">
+                <h3>Settings</h3>
+                <span class="modal-close" id="settings-close">&times;</span>
+            </div>
+            <div class="settings-section">
+                <div class="settings-section-title">Account</div>
+                <div class="settings-row"><span>Signed in as</span><strong id="settings-username">—</strong></div>
+                <button class="action-btn" id="btn-logout" style="margin-top:8px">Sign out</button>
+            </div>
+            <div class="settings-section">
+                <div class="settings-section-title">Playback</div>
+                <label class="settings-row">
+                    <span>Preferred strategy</span>
+                    <select id="opt-strategy">
+                        <option value="direct">Direct (fastest, requires compatible codec)</option>
+                        <option value="remux">Remux (repackages container)</option>
+                        <option value="transcode">Transcode (most compatible)</option>
+                    </select>
+                </label>
+                <div class="settings-hint">Fallbacks are tried automatically if the preferred strategy fails.</div>
+            </div>
+            <div class="settings-section">
+                <div class="settings-section-title">Subtitles</div>
+                <label class="settings-row">
+                    <span>Size</span>
+                    <select id="opt-sub-size">
+                        <option value="s">Small</option>
+                        <option value="m" selected>Medium</option>
+                        <option value="l">Large</option>
+                        <option value="xl">Extra large</option>
+                    </select>
+                </label>
+                <label class="settings-row">
+                    <span>Font</span>
+                    <select id="opt-sub-font">
+                        <option value="sans" selected>Sans</option>
+                        <option value="serif">Serif</option>
+                        <option value="mono">Monospace</option>
+                    </select>
+                </label>
+                <label class="settings-row">
+                    <span>Text color</span>
+                    <input type="color" id="opt-sub-color" value="#ffffff">
+                </label>
+                <label class="settings-row">
+                    <span>Background</span>
+                    <select id="opt-sub-bg">
+                        <option value="none">None</option>
+                        <option value="semi" selected>Semi-transparent</option>
+                        <option value="solid">Solid</option>
+                    </select>
+                </label>
+                <label class="settings-row">
+                    <span>Edge effect</span>
+                    <select id="opt-sub-edge">
+                        <option value="none">None</option>
+                        <option value="outline" selected>Outline</option>
+                        <option value="shadow">Drop shadow</option>
+                    </select>
+                </label>
+                <div class="sub-preview" id="sub-preview"><span>Subtitle preview</span></div>
             </div>
         </div>
     </div>

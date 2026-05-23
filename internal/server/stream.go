@@ -4,7 +4,6 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -52,12 +51,6 @@ func (s *Server) streamDirect(w http.ResponseWriter, r *http.Request, filePath s
 }
 
 func (s *Server) streamRemux(w http.ResponseWriter, r *http.Request, filePath string) {
-	ext := strings.ToLower(filepath.Ext(filePath))
-	if ext == ".mp4" || ext == ".m4v" || ext == ".mov" {
-		http.ServeFile(w, r, filePath)
-		return
-	}
-
 	ffmpegPath, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		log.Println("FFmpeg not found, falling back to direct play")
@@ -73,12 +66,13 @@ func (s *Server) streamRemux(w http.ResponseWriter, r *http.Request, filePath st
 		"-c:v", "copy",
 		"-c:a", "aac", "-ac", "2",
 		"-f", "mp4",
-		"-movflags", "frag_keyframe+empty_moov",
+		"-movflags", "frag_keyframe+empty_moov+default_base_moof+separate_moof",
 		"pipe:1",
 	}
 
 	cmd := exec.CommandContext(r.Context(), ffmpegPath, args...)
 	cmd.Stdout = w
+	cmd.Stderr = log.Writer()
 
 	if err := cmd.Start(); err != nil {
 		log.Printf("Failed to start FFmpeg remux: %v", err)
@@ -106,15 +100,16 @@ func (s *Server) streamTranscode(w http.ResponseWriter, r *http.Request, filePat
 
 	args := []string{
 		"-i", filePath,
-		"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+		"-c:v", "libx264", "-preset", "ultrafast", "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p", "-crf", "23",
 		"-c:a", "aac", "-ac", "2",
 		"-f", "mp4",
-		"-movflags", "frag_keyframe+empty_moov",
+		"-movflags", "frag_keyframe+empty_moov+default_base_moof+separate_moof",
 		"pipe:1",
 	}
 
 	cmd := exec.CommandContext(r.Context(), ffmpegPath, args...)
 	cmd.Stdout = w
+	cmd.Stderr = log.Writer()
 
 	if err := cmd.Start(); err != nil {
 		log.Printf("Failed to start FFmpeg transcode: %v", err)

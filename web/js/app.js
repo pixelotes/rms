@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-    const state = { sessionToken: '', currentPath: '', libraries: [], streamStrategies: ['direct', 'remux', 'transcode'], currentStrategyIndex: 0, currentBg: null, subtitleOffset: 0, subs: [], currentVideoPath: null, nextEpisodePath: null, nextEpisodeTimer: null };
+    const state = { sessionToken: '', username: '', currentPath: '', libraries: [], streamStrategies: ['direct', 'remux', 'transcode'], serverStrategies: ['direct', 'remux', 'transcode'], currentStrategyIndex: 0, currentBg: null, subtitleOffset: 0, subs: [], currentVideoPath: null, nextEpisodePath: null, nextEpisodeTimer: null, prefs: null };
     const $ = id => document.getElementById(id);
     const loginScreen = $('login-screen'), appContainer = $('app-container'), loginForm = $('login-form');
     const fileBrowser = $('file-browser'), videoPlayerModal = $('video-player-modal');
@@ -41,19 +41,48 @@ document.addEventListener('DOMContentLoaded', () => {
     loginForm.addEventListener('submit', async e => {
         e.preventDefault(); showLoading('Signing in...');
         try {
-            const resp = await fetch('/api/v1/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: $('password-input').value }) });
-            if (!resp.ok) throw new Error('Incorrect password');
-            state.sessionToken = (await resp.json()).token;
-            loginScreen.style.display = 'none'; appContainer.style.display = 'block';
-            hideLoading(); browseFiles('');
+            const resp = await fetch('/api/v1/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ username: $('username-input').value.trim() || 'rms', password: $('password-input').value })
+            });
+            if (!resp.ok) throw new Error('Incorrect username or password');
+            const data = await resp.json();
+            state.sessionToken = data.token;
+            state.username = data.username;
+            await enterApp();
+            hideLoading();
         } catch (err) { hideLoading(); $('login-error').textContent = err.message; }
     });
 
+    async function enterApp() {
+        loginScreen.style.display = 'none';
+        appContainer.style.display = 'block';
+        await loadServerConfig();
+        loadPrefs();
+        applyPrefs();
+        $('settings-username').textContent = state.username;
+        browseFiles('');
+    }
+
     async function fetchWithAuth(url, opts = {}) {
         const headers = { ...opts.headers, Authorization: `Bearer ${state.sessionToken}` };
-        const resp = await fetch(url, { ...opts, headers });
-        if (resp.status === 401) { toast('Session expired'); window.location.reload(); }
+        const resp = await fetch(url, { ...opts, headers, credentials: 'include' });
+        if (resp.status === 401) { toast('Session expired'); globalThis.location.reload(); }
         return resp;
+    }
+
+    // Try cookie-based auto-login
+    async function tryAutoLogin() {
+        try {
+            const resp = await fetch('/api/v1/me', { credentials: 'include' });
+            if (!resp.ok) return false;
+            const data = await resp.json();
+            state.username = data.username;
+            await enterApp();
+            return true;
+        } catch { return false; }
     }
 
     // Browse
@@ -526,4 +555,132 @@ document.addEventListener('DOMContentLoaded', () => {
             if (el) el.innerHTML = subs.map(s => `<span class="sub-tag">${s.label}</span>`).join('');
         } catch {}
     }
+
+    // --- Server config & per-user preferences ---
+    const DEFAULT_PREFS = {
+        strategy: 'direct',
+        subSize: 'm', subFont: 'sans', subColor: '#ffffff', subBg: 'semi', subEdge: 'outline'
+    };
+
+    async function loadServerConfig() {
+        try {
+            const resp = await fetchWithAuth('/api/v1/config');
+            if (!resp.ok) return;
+            const data = await resp.json();
+            if (Array.isArray(data.stream_strategy) && data.stream_strategy.length) {
+                state.serverStrategies = data.stream_strategy.slice();
+            }
+        } catch {}
+    }
+
+    function prefsKey() { return `rms-prefs-${state.username || 'rms'}`; }
+
+    function loadPrefs() {
+        let stored = {};
+        try { stored = JSON.parse(localStorage.getItem(prefsKey()) || '{}'); } catch {}
+        state.prefs = { ...DEFAULT_PREFS, ...stored };
+    }
+
+    function savePrefs() {
+        try { localStorage.setItem(prefsKey(), JSON.stringify(state.prefs)); } catch {}
+    }
+
+    function applyPrefs() {
+        // Reorder stream strategies: preferred first, then the rest of the server-configured order.
+        const preferred = state.prefs.strategy;
+        const rest = state.serverStrategies.filter(s => s !== preferred);
+        state.streamStrategies = state.serverStrategies.includes(preferred)
+            ? [preferred, ...rest]
+            : state.serverStrategies.slice();
+        applySubtitleStyle();
+        applySubtitlePreview();
+        syncSettingsControls();
+    }
+
+    function subtitleStyleCSS() {
+        const sizes = { s: '0.85em', m: '1em', l: '1.25em', xl: '1.5em' };
+        const fonts = {
+            sans: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+            serif: 'Georgia, "Times New Roman", serif',
+            mono: '"SF Mono", Consolas, "Courier New", monospace'
+        };
+        const bg = state.prefs.subBg === 'none'
+            ? 'transparent'
+            : (state.prefs.subBg === 'solid' ? 'rgba(0,0,0,0.95)' : 'rgba(0,0,0,0.55)');
+        const edge = state.prefs.subEdge === 'shadow'
+            ? '2px 2px 4px rgba(0,0,0,0.9)'
+            : (state.prefs.subEdge === 'none'
+                ? 'none'
+                : '1px 1px 2px #000, -1px -1px 2px #000, 1px -1px 2px #000, -1px 1px 2px #000');
+        return {
+            color: state.prefs.subColor || '#fff',
+            background: bg,
+            font: fonts[state.prefs.subFont] || fonts.sans,
+            size: sizes[state.prefs.subSize] || sizes.m,
+            edge
+        };
+    }
+
+    function applySubtitleStyle() {
+        const s = subtitleStyleCSS();
+        let styleEl = document.getElementById('rms-cue-style');
+        if (!styleEl) {
+            styleEl = document.createElement('style');
+            styleEl.id = 'rms-cue-style';
+            document.head.appendChild(styleEl);
+        }
+        styleEl.textContent = `::cue { color: ${s.color}; background-color: ${s.background}; font-family: ${s.font}; font-size: ${s.size}; text-shadow: ${s.edge}; }`;
+    }
+
+    function applySubtitlePreview() {
+        const s = subtitleStyleCSS();
+        const span = $('sub-preview')?.querySelector('span');
+        if (!span) return;
+        span.style.color = s.color;
+        span.style.backgroundColor = s.background;
+        span.style.fontFamily = s.font;
+        span.style.fontSize = s.size;
+        span.style.textShadow = s.edge;
+    }
+
+    function syncSettingsControls() {
+        $('opt-strategy').value = state.prefs.strategy;
+        $('opt-sub-size').value = state.prefs.subSize;
+        $('opt-sub-font').value = state.prefs.subFont;
+        $('opt-sub-color').value = state.prefs.subColor;
+        $('opt-sub-bg').value = state.prefs.subBg;
+        $('opt-sub-edge').value = state.prefs.subEdge;
+    }
+
+    // Settings modal wiring
+    const settingsModal = $('settings-modal');
+    $('btn-settings').addEventListener('click', () => { settingsModal.style.display = 'flex'; });
+    $('settings-close').addEventListener('click', () => { settingsModal.style.display = 'none'; });
+    settingsModal.addEventListener('click', e => { if (e.target === settingsModal) settingsModal.style.display = 'none'; });
+
+    function bindPref(elId, prefKey, opts = {}) {
+        const el = $(elId);
+        if (!el) return;
+        el.addEventListener(opts.event || 'change', () => {
+            state.prefs[prefKey] = el.value;
+            savePrefs();
+            applyPrefs();
+        });
+    }
+    bindPref('opt-strategy', 'strategy');
+    bindPref('opt-sub-size', 'subSize');
+    bindPref('opt-sub-font', 'subFont');
+    bindPref('opt-sub-color', 'subColor', { event: 'input' });
+    bindPref('opt-sub-bg', 'subBg');
+    bindPref('opt-sub-edge', 'subEdge');
+
+    $('btn-logout').addEventListener('click', async () => {
+        try { await fetch('/api/v1/logout', { method: 'POST', credentials: 'include' }); } catch {}
+        state.sessionToken = '';
+        state.username = '';
+        globalThis.location.reload();
+    });
+
+    // Boot: try cookie-based auto-login, otherwise show login screen
+    tryAutoLogin();
 });

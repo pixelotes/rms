@@ -10,7 +10,10 @@ RMS emulates a subset of the Jellyfin API — enough to work with popular client
 | **Moonfin** | Android TV | Fully working |
 | **Kodi** (Jellyfin plugin) | All platforms | Fully working (Add-on mode) |
 | **Findroid** | Android | Requires API 10.11 |
-| **Jellyfin Web** | Browser | Not supported |
+| **Jellyfin Web / Desktop wrapper** | Browser/macOS | Not supported as a primary target |
+
+!!! note
+    The official Jellyfin app on macOS is effectively a wrapper around Jellyfin Web. If it works, treat that as Web UI compatibility rather than native client API compatibility.
 
 ## How It Works
 
@@ -18,7 +21,7 @@ RMS registers routes that match the Jellyfin API surface. Clients connect to RMS
 
 - **No transcoding** — `SupportsDirectPlay` and `SupportsDirectStream` are always `true`. Clients fall back to direct play.
 - **No real sessions** — playback state is tracked in memory (or optionally persisted to file), but there's no session management.
-- **No user management** — users are defined in YAML config. No registration, password reset, or admin panel.
+- **YAML-based user management** — users (and per-library access) are defined in `config.yml`. The built-in `rms` admin user with `app.ui_password` is always available and sees all libraries; additional users can be added under `users:`. There is no in-app registration, password reset, or admin panel.
 - **Stub endpoints** — many endpoints return empty responses. Clients handle this gracefully.
 
 ## Authentication

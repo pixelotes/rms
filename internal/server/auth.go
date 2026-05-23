@@ -17,15 +17,19 @@ import (
 type contextKey string
 
 const contextKeyUser contextKey = "username"
+const sessionCookieName = "rms_token"
+const sessionTTL = 30 * 24 * time.Hour
 
-// --- RMS Native Auth (JWT Bearer) ---
+// --- RMS Native Auth (JWT Bearer + Cookie) ---
 
 type loginRequest struct {
+	Username string `json:"username"`
 	Password string `json:"password"`
 }
 
 type loginResponse struct {
-	Token string `json:"token"`
+	Token    string `json:"token"`
+	Username string `json:"username"`
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -35,35 +39,76 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try authenticating with any configured user using just password
-	user := s.config.AuthenticateUser("", req.Password)
-	if user == nil {
-		// Try all users with this password (web UI only sends password)
-		for _, u := range s.config.Users {
-			if u.Password == req.Password {
-				user = &u
-				break
-			}
-		}
+	username := req.Username
+	if username == "" {
+		username = "rms"
 	}
+
+	user := s.config.AuthenticateUser(username, req.Password)
 	if user == nil {
-		respondError(w, http.StatusUnauthorized, "Incorrect password")
+		respondError(w, http.StatusUnauthorized, "Invalid username or password")
 		return
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"exp":  time.Now().Add(24 * time.Hour).Unix(),
-		"iat":  time.Now().Unix(),
-		"user": user.Username,
-	})
-
-	tokenString, err := token.SignedString([]byte(s.config.App.JWTSecret))
+	tokenString, err := s.issueToken(user.Username)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to generate token")
 		return
 	}
 
-	respondJSON(w, http.StatusOK, loginResponse{Token: tokenString})
+	setSessionCookie(w, r, tokenString)
+	respondJSON(w, http.StatusOK, loginResponse{Token: tokenString, Username: user.Username})
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	clearSessionCookie(w, r)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, map[string]string{"username": usernameFromContext(r)})
+}
+
+func (s *Server) handleClientConfig(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"username":        usernameFromContext(r),
+		"stream_strategy": s.config.Player.StreamStrategy,
+	})
+}
+
+func (s *Server) issueToken(username string) (string, error) {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"exp":  time.Now().Add(sessionTTL).Unix(),
+		"iat":  time.Now().Unix(),
+		"user": username,
+	})
+	return token.SignedString([]byte(s.config.App.JWTSecret))
+}
+
+func setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    token,
+		Path:     "/",
+		Expires:  time.Now().Add(sessionTTL),
+		MaxAge:   int(sessionTTL.Seconds()),
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    "",
+		Path:     "/",
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   r.TLS != nil,
+		SameSite: http.SameSiteLaxMode,
+	})
 }
 
 func (s *Server) jwtMiddleware(next http.Handler) http.Handler {
@@ -75,6 +120,8 @@ func (s *Server) jwtMiddleware(next http.Handler) http.Handler {
 			tokenString = strings.TrimPrefix(auth, "Bearer ")
 		} else if t := r.URL.Query().Get("token"); t != "" {
 			tokenString = t
+		} else if c, err := r.Cookie(sessionCookieName); err == nil {
+			tokenString = c.Value
 		}
 
 		if tokenString == "" {

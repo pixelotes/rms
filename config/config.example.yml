@@ -27,8 +27,10 @@ libraries:
   #   metadata_lang: en
   #   content_type: tvseries
 
-# Optional: define users with per-library access.
-# If omitted, a single "rms" user with ui_password is used with access to all libraries.
+# Optional: define additional users with per-library access.
+# The built-in "rms" user (with app.ui_password) is ALWAYS available and has
+# access to every library — you don't need to list it here. Users defined
+# below get only the libraries listed in their `libraries:` field (empty = all).
 # users:
 #   - username: "raul"
 #     password: "${RAUL_PASSWORD}"

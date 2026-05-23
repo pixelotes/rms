@@ -63,10 +63,13 @@ func (s *Server) registerRoutes() {
 
 	// Public
 	api.HandleFunc("/login", s.handleLogin).Methods("POST")
+	api.HandleFunc("/logout", s.handleLogout).Methods("POST")
 
-	// Protected (JWT Bearer)
+	// Protected (JWT Bearer or session cookie)
 	protected := api.PathPrefix("").Subrouter()
 	protected.Use(s.jwtMiddleware)
+	protected.HandleFunc("/me", s.handleMe).Methods("GET")
+	protected.HandleFunc("/config", s.handleClientConfig).Methods("GET")
 	protected.HandleFunc("/browse", s.handleBrowse).Methods("GET")
 	protected.HandleFunc("/stream/{filePath:.+}", s.handleStream).Methods("GET")
 	protected.HandleFunc("/subtitles/{filePath:.+}", s.handleSubtitles).Methods("GET")
