@@ -315,16 +315,26 @@ func (s *Server) jfGetItemImage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) jfGetLatest(w http.ResponseWriter, r *http.Request) {
 	libs := s.librariesForRequest(r)
 	parentID := r.URL.Query().Get("parentId")
-	dir, libIndex := s.resolveJellyfinParent(parentID, libs)
-	if dir == "" {
-		respondJSON(w, http.StatusOK, []interface{}{})
-		return
+
+	items := make([]map[string]interface{}, 0)
+	if parentID == "" {
+		for i, lib := range libs {
+			items = append(items, s.collectItemsRecursive(lib.Path, i, "", "", libs)...)
+		}
+	} else {
+		dir, libIndex := s.resolveJellyfinParent(parentID, libs)
+		if dir == "" {
+			respondJSON(w, http.StatusOK, []interface{}{})
+			return
+		}
+		items = s.collectItemsRecursive(dir, libIndex, "", "", libs)
 	}
 
-	items := s.collectItemsRecursive(dir, libIndex, "", "", libs)
-	if items == nil {
-		items = make([]map[string]interface{}, 0)
-	}
+	sort.Slice(items, func(i, j int) bool {
+		a, _ := items[i]["DateCreated"].(string)
+		b, _ := items[j]["DateCreated"].(string)
+		return a > b
+	})
 
 	limit := 10
 	if l, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && l > 0 {
@@ -336,6 +346,33 @@ func (s *Server) jfGetLatest(w http.ResponseWriter, r *http.Request) {
 
 	s.patchItemsUserData(items, r)
 	respondJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) jfGetSuggestions(w http.ResponseWriter, r *http.Request) {
+	libs := s.librariesForRequest(r)
+	limit := 12
+	if l, err := strconv.Atoi(queryParam(r, "limit", "Limit")); err == nil && l > 0 {
+		limit = l
+	}
+
+	items := make([]map[string]interface{}, 0)
+	for i, lib := range libs {
+		items = append(items, s.collectItemsRecursive(lib.Path, i, "", "", libs)...)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		a, _ := items[i]["DateCreated"].(string)
+		b, _ := items[j]["DateCreated"].(string)
+		return a > b
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	s.patchItemsUserData(items, r)
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"Items":            items,
+		"StartIndex":       0,
+		"TotalRecordCount": len(items),
+	})
 }
 
 // --- Filters ---

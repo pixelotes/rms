@@ -245,6 +245,9 @@ func (s *Server) jfReportPlayback(w http.ResponseWriter, r *http.Request) {
 		PositionTicks int64  `json:"PositionTicks"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
+	if req.ItemId == "" {
+		req.ItemId = mux.Vars(r)["itemId"]
+	}
 	if req.ItemId != "" {
 		userID := stableUserID(usernameFromContext(r))
 		s.userData.SetPosition(userID, req.ItemId, req.PositionTicks)
@@ -299,6 +302,12 @@ func (s *Server) jfUpdateUserData(w http.ResponseWriter, r *http.Request) {
 	}
 	s.userData.SetFavorite(userID, itemID, req.IsFavorite)
 
+	respondJSON(w, http.StatusOK, s.userData.Get(userID, itemID))
+}
+
+func (s *Server) jfUserData(w http.ResponseWriter, r *http.Request) {
+	itemID := mux.Vars(r)["itemId"]
+	userID := stableUserID(usernameFromContext(r))
 	respondJSON(w, http.StatusOK, s.userData.Get(userID, itemID))
 }
 

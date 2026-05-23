@@ -169,15 +169,93 @@ document.addEventListener('DOMContentLoaded', () => {
     function playVideo(path) {
         state.currentStrategyIndex = 0;
         videoPlayerModal.style.display = 'flex';
-        player.off('error');
-        player.on('error', () => {
-            if (player.error()?.code === 4) {
-                state.currentStrategyIndex++;
-                if (state.currentStrategyIndex < state.streamStrategies.length) loadVideo(path);
-                else { hideLoading(); toast('All strategies failed'); }
-            }
-        });
+        player.off('error', handleVideoError);
+        player.off('timeupdate', trackPlaybackProgress);
+        state.skipAttempts = 0;
+        state.lastGoodTime = 0;
+        state.lastRecoveryAt = 0;
+        player.on('timeupdate', trackPlaybackProgress);
+        player.on('error', handleVideoError);
         loadVideo(path);
+    }
+
+    function trackPlaybackProgress() {
+        if (player.readyState() < 2) return;
+        const t = player.currentTime();
+        if (t > state.lastGoodTime) state.lastGoodTime = t;
+        // Reset skip counter once we've had 5s of wallclock-time without new errors.
+        if (state.skipAttempts > 0 && Date.now() - state.lastRecoveryAt > 5000) {
+            console.log('[player] clean playback resumed, resetting skip counter');
+            state.skipAttempts = 0;
+        }
+    }
+
+    function handleVideoError() {
+        const err = player.error();
+        if (!err) return;
+
+        const ct = player.currentTime() || 0;
+        const anchor = Math.max(state.lastGoodTime, ct);
+        console.warn('[player] handleVideoError', { code: err.code, ct, anchor, attempts: state.skipAttempts });
+
+        // Initial-load failure (currentTime ~ 0 and never had good time): rotate stream strategy.
+        if (anchor < 1 && err.code === 4 && state.currentVideoPath) {
+            state.currentStrategyIndex++;
+            if (state.currentStrategyIndex < state.streamStrategies.length) loadVideo(state.currentVideoPath);
+            else { hideLoading(); toast('All strategies failed'); }
+            return;
+        }
+
+        // Give up after enough failed skips — usually a totally broken file or huge corrupt region.
+        if (state.skipAttempts >= 15) {
+            if (state.skipAttempts === 15) { toast('Too many decode errors, giving up'); state.skipAttempts++; }
+            return;
+        }
+
+        state.skipAttempts++;
+        state.lastRecoveryAt = Date.now();
+        const myAttempt = state.skipAttempts;
+        // Skip distance grows with attempts to escape longer corrupt regions: 3, 4, 5, 6, ...
+        const skipDistance = 2 + myAttempt;
+        const seekTo = anchor + skipDistance;
+        console.warn(`[player] recovery #${myAttempt}: skipping ${skipDistance}s -> ${seekTo.toFixed(1)}s`);
+
+        const src = player.currentSrc();
+        player.one('loadedmetadata', () => {
+            // A newer attempt has been queued: bail and let it handle the seek.
+            if (state.skipAttempts !== myAttempt) return;
+            player.currentTime(seekTo);
+            player.play().catch(() => {});
+        });
+        player.src({ src, type: 'video/mp4' });
+
+        if (myAttempt === 1) toast('Skipping corrupted region...');
+    }
+
+    // Safari often fails silently (no 'error' event) for unsupported codecs/containers.
+    // The watchdog detects "stuck loading" and rotates to the next strategy.
+    function armLoadWatchdog(strategy) {
+        clearLoadWatchdog();
+        player.one('canplay', clearLoadWatchdog);
+        player.one('playing', clearLoadWatchdog);
+        state.loadWatchdog = setTimeout(() => {
+            console.warn(`[player] watchdog: ${strategy} stuck loading, rotating strategy`);
+            state.currentStrategyIndex++;
+            if (state.currentStrategyIndex < state.streamStrategies.length) {
+                toast(`${strategy} stuck, trying ${state.streamStrategies[state.currentStrategyIndex]}...`);
+                loadVideo(state.currentVideoPath);
+            } else {
+                hideLoading();
+                toast('All strategies failed');
+            }
+        }, 12000);
+    }
+
+    function clearLoadWatchdog() {
+        if (state.loadWatchdog) {
+            clearTimeout(state.loadWatchdog);
+            state.loadWatchdog = null;
+        }
     }
 
     async function loadVideo(path) {
@@ -186,6 +264,7 @@ document.addEventListener('DOMContentLoaded', () => {
         state.currentVideoPath = path;
         hideNextEpisodePrompt();
         showLoading(`Loading (${strategy})...`);
+        armLoadWatchdog(strategy);
         try {
             const videoUrl = `/api/v1/stream/${encodeURIComponent(safePath)}?strategy=${strategy}&token=${encodeURIComponent(state.sessionToken)}`;
             player.src({ src: videoUrl, type: 'video/mp4' });
@@ -232,7 +311,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function closeModal() {
-        videoPlayerModal.style.display = 'none'; player.pause(); player.off('error');
+        videoPlayerModal.style.display = 'none'; player.pause(); player.off('error', handleVideoError); player.off('timeupdate', trackPlaybackProgress); clearLoadWatchdog();
         const src = player.currentSrc();
         if (src?.startsWith('blob:')) URL.revokeObjectURL(src);
         player.src('');

@@ -37,9 +37,13 @@ func (s *Server) jfPlaybackInfo(w http.ResponseWriter, r *http.Request) {
 		path = videoPath
 	}
 
+	playSessionID := fmt.Sprintf("ps-%s", itemID[:8])
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"MediaSources":  s.buildMediaSources(path),
-		"PlaySessionId": fmt.Sprintf("ps-%s", itemID[:8]),
+		"MediaSources":           s.buildMediaSources(path, playSessionID),
+		"PlaySessionId":          playSessionID,
+		"ErrorCode":              "NoError",
+		"TranscodingUrl":         nil,
+		"TranscodingSubProtocol": nil,
 	})
 }
 
@@ -131,7 +135,7 @@ func (s *Server) jfSubtitleStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) buildMediaSources(videoPath string) []map[string]interface{} {
+func (s *Server) buildMediaSources(videoPath string, playSessionID ...string) []map[string]interface{} {
 	info, err := os.Stat(videoPath)
 	if err != nil {
 		return make([]map[string]interface{}, 0)
@@ -206,6 +210,10 @@ func (s *Server) buildMediaSources(videoPath string) []map[string]interface{} {
 	}
 
 	sourceID := media.ItemID(videoPath)
+	sessionID := fmt.Sprintf("ps-%s", sourceID[:8])
+	if len(playSessionID) > 0 && playSessionID[0] != "" {
+		sessionID = playSessionID[0]
+	}
 
 	var runTimeTicks int64
 	if nfo, err := media.ParseEpisodeNFO(videoPath); err == nil {
@@ -226,35 +234,46 @@ func (s *Server) buildMediaSources(videoPath string) []map[string]interface{} {
 		}
 	}
 
+	directStreamURL := fmt.Sprintf("/Videos/%s/stream.%s?static=true&mediaSourceId=%s&playSessionId=%s", sourceID, container, sourceID, sessionID)
 	source := map[string]interface{}{
-		"Id":                     sourceID,
-		"Path":                   videoPath,
-		"Protocol":               "File",
-		"Type":                   "Default",
-		"Container":              container,
-		"Size":                   info.Size(),
-		"Name":                   filepath.Base(videoPath),
-		"IsRemote":               false,
-		"SupportsDirectPlay":     true,
-		"SupportsDirectStream":   true,
-		"SupportsTranscoding":    true,
-		"ReadAtNativeFramerate":  false,
-		"IgnoreDts":              false,
-		"IgnoreIndex":            false,
-		"GenPtsInput":            false,
-		"IsInfiniteStream":       false,
-		"RequiresOpening":        false,
-		"RequiresClosing":        false,
-		"RequiresLooping":        false,
-		"SupportsProbing":        true,
-		"HasSegments":            false,
-		"TranscodingSubProtocol": "http",
-		"MediaStreams":           mediaStreams,
-		"DirectStreamUrl":        fmt.Sprintf("/Videos/%s/stream?static=true&mediaSourceId=%s", sourceID, sourceID),
+		"Id":                         sourceID,
+		"Path":                       videoPath,
+		"Protocol":                   "File",
+		"Type":                       "Default",
+		"Container":                  container,
+		"Size":                       info.Size(),
+		"Name":                       filepath.Base(videoPath),
+		"IsRemote":                   false,
+		"ETag":                       sourceID,
+		"RunTimeTicks":               runTimeTicks,
+		"SupportsDirectPlay":         true,
+		"SupportsDirectStream":       true,
+		"SupportsTranscoding":        false,
+		"SupportsProbing":            true,
+		"SupportsThumbnails":         false,
+		"ReadAtNativeFramerate":      false,
+		"IgnoreDts":                  false,
+		"IgnoreIndex":                false,
+		"GenPtsInput":                false,
+		"IsInfiniteStream":           false,
+		"RequiresOpening":            false,
+		"RequiresClosing":            false,
+		"RequiresLooping":            false,
+		"HasSegments":                false,
+		"DefaultAudioStreamIndex":    1,
+		"DefaultSubtitleStreamIndex": nil,
+		"Bitrate":                    8000000,
+		"RequiredHttpHeaders":        map[string]string{},
+		"MediaStreams":               mediaStreams,
+		"DirectStreamUrl":            directStreamURL,
+		"TranscodingUrl":             nil,
+		"TranscodingSubProtocol":     nil,
+		"TranscodingContainer":       nil,
+		"PlaySessionId":              sessionID,
 	}
 
-	if runTimeTicks > 0 {
-		source["RunTimeTicks"] = runTimeTicks
+	if runTimeTicks == 0 {
+		delete(source, "RunTimeTicks")
 	}
 
 	return []map[string]interface{}{source}

@@ -154,6 +154,25 @@ func (s *Server) collectItemsRecursive(dir string, libIndex int, includeTypes st
 			if typeMatch && nameMatch {
 				items = append(items, item)
 			}
+			items = append(items, s.collectItemsRecursive(fullPath, libIndex, includeTypes, searchTerm, libs)...)
+			continue
+		}
+
+		if !media.IsVideoFile(name) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		item := s.buildJellyfinItem(fullPath, info, libIndex, libs)
+		itemType, _ := item["Type"].(string)
+
+		typeMatch := includeTypes == "" || strings.Contains(includeTypes, itemType)
+		nameMatch := searchTerm == "" || strings.Contains(strings.ToLower(name), searchLower)
+
+		if typeMatch && nameMatch {
+			items = append(items, item)
 		}
 	}
 
@@ -167,7 +186,7 @@ func (s *Server) buildJellyfinItem(path string, info os.FileInfo, libIndex int, 
 	if info.IsDir() {
 		return s.buildFolderItem(path, name, id, libIndex, libs)
 	}
-	return s.buildVideoItem(path, name, id, libIndex)
+	return s.buildVideoItem(path, name, id, libIndex, libs)
 }
 
 func (s *Server) buildFolderItem(path, name, id string, libIndex int, libs []config.Library) map[string]interface{} {
@@ -200,6 +219,16 @@ func (s *Server) buildFolderItem(path, name, id string, libIndex int, libs []con
 
 	if media.FindImage(path, "Backdrop") != "" {
 		item["BackdropImageTags"] = []string{"backdrop"}
+	}
+
+	if itemType == "Season" {
+		showPath := filepath.Dir(path)
+		seriesID := media.ItemID(showPath)
+		item["SeriesId"] = seriesID
+		item["SeriesName"] = filepath.Base(showPath)
+		item["ParentId"] = seriesID
+		item["IndexNumber"] = extractSeasonNumber(name)
+		item["ChildCount"] = countVideoFiles(path)
 	}
 
 	if nfo, err := media.ParseNFO(path); err == nil {
@@ -263,12 +292,20 @@ func (s *Server) buildFolderItem(path, name, id string, libIndex int, libs []con
 	return item
 }
 
-func (s *Server) buildVideoItem(path, name, id string, libIndex int) map[string]interface{} {
+func (s *Server) buildVideoItem(path, name, id string, libIndex int, libs []config.Library) map[string]interface{} {
+	itemType := "Video"
+	if libIndex >= 0 && libIndex < len(libs) {
+		ct := libs[libIndex].ContentType
+		if ct == "tvseries" || ct == "anime" {
+			itemType = "Episode"
+		}
+	}
+
 	item := map[string]interface{}{
 		"Name":         cleanEpisodeName(name),
 		"SortName":     name,
 		"Id":           id,
-		"Type":         "Video",
+		"Type":         itemType,
 		"IsFolder":     false,
 		"MediaType":    "Video",
 		"VideoType":    "VideoFile",
@@ -280,6 +317,24 @@ func (s *Server) buildVideoItem(path, name, id string, libIndex int) map[string]
 		"People":       []interface{}{},
 		"ExternalUrls": []interface{}{},
 		"DateCreated":  fileDateCreated(path),
+	}
+
+	if itemType == "Episode" {
+		seasonPath := filepath.Dir(path)
+		showPath := filepath.Dir(seasonPath)
+		seasonNumber := extractSeasonNumber(filepath.Base(seasonPath))
+		if !isSeasonDir(filepath.Base(seasonPath)) {
+			showPath = seasonPath
+			seasonNumber = 1
+		}
+		seriesID := media.ItemID(showPath)
+		seasonID := media.ItemID(seasonPath)
+		item["SeriesId"] = seriesID
+		item["SeriesName"] = filepath.Base(showPath)
+		item["SeasonId"] = seasonID
+		item["ParentId"] = seasonID
+		item["ParentIndexNumber"] = seasonNumber
+		item["IndexNumber"] = extractEpisodeNumber(name)
 	}
 
 	if nfo, err := media.ParseEpisodeNFO(path); err == nil {
@@ -378,6 +433,20 @@ func extractSeasonNumber(name string) int {
 
 func extractEpisodeNumber(filename string) int {
 	return media.ExtractEpisodeNumber(filename)
+}
+
+func countVideoFiles(dir string) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, entry := range entries {
+		if !entry.IsDir() && media.IsVideoFile(entry.Name()) {
+			count++
+		}
+	}
+	return count
 }
 
 func cleanEpisodeName(filename string) string {
