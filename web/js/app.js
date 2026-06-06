@@ -4,7 +4,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const loginScreen = $('login-screen'), appContainer = $('app-container'), loginForm = $('login-form');
     const fileBrowser = $('file-browser'), videoPlayerModal = $('video-player-modal');
     const bgImage = $('bg-image'), metadataContainer = $('metadata-container');
-    const player = videojs('video-player');
+    const player = videojs('video-player', {
+        fluid: true,
+        // Disable the built-in subtitle styling dialog: user prefs (rms-prefs-*) own
+        // cue style via ::cue, and TextTrackSettings would inject inline styles that
+        // override them.
+        textTrackSettings: false,
+        persistTextTrackSettings: false,
+    });
 
     function showLoading(text) { $('loading-text').textContent = text; $('loading-overlay').style.display = 'flex'; }
     function hideLoading() { $('loading-overlay').style.display = 'none'; }
@@ -67,7 +74,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function fetchWithAuth(url, opts = {}) {
-        const headers = { ...opts.headers, Authorization: `Bearer ${state.sessionToken}` };
+        const headers = { ...opts.headers };
+        if (state.sessionToken) headers.Authorization = `Bearer ${state.sessionToken}`;
         const resp = await fetch(url, { ...opts, headers, credentials: 'include' });
         if (resp.status === 401) { toast('Session expired'); globalThis.location.reload(); }
         return resp;
@@ -200,12 +208,47 @@ document.addEventListener('DOMContentLoaded', () => {
         videoPlayerModal.style.display = 'flex';
         player.off('error', handleVideoError);
         player.off('timeupdate', trackPlaybackProgress);
+        player.off('loadedmetadata', applyKnownDuration);
         state.skipAttempts = 0;
         state.lastGoodTime = 0;
         state.lastRecoveryAt = 0;
+        if (state.recoveryTimer) { clearTimeout(state.recoveryTimer); state.recoveryTimer = null; }
         player.on('timeupdate', trackPlaybackProgress);
         player.on('error', handleVideoError);
+        player.on('loadedmetadata', applyKnownDuration);
+        installDurationOverride();
         loadVideo(path);
+    }
+
+    // Override player.duration() for streamed sources (remux/transcode) where the
+    // browser only sees a buffered duration. We probe the real duration on the
+    // server and substitute it whenever it's greater than what the tech reports.
+    let durationOverrideInstalled = false;
+    function installDurationOverride() {
+        if (durationOverrideInstalled) return;
+        const origDuration = player.duration.bind(player);
+        const origCurrentTime = player.currentTime.bind(player);
+        player.duration = function (val) {
+            // Delegate setter calls so video.js can keep its internal duration cache fresh.
+            if (arguments.length > 0) return origDuration(val);
+            const real = origDuration();
+            if (state.knownDuration && state.knownDuration > (real || 0)) return state.knownDuration;
+            return real;
+        };
+        // After a "nuclear" reseek the pipe restarts at 0 from the player's
+        // POV. We add playbackOffset so the UI (progress bar, time display,
+        // subtitle cue timing) keeps showing absolute file time.
+        player.currentTime = function (val) {
+            if (arguments.length > 0) return origCurrentTime(val);
+            const raw = origCurrentTime();
+            return (state.playbackOffset || 0) + (raw || 0);
+        };
+        durationOverrideInstalled = true;
+    }
+    function applyKnownDuration() {
+        if (!state.knownDuration) return;
+        // Force video.js to refresh its progress bar / time display.
+        player.trigger('durationchange');
     }
 
     function trackPlaybackProgress() {
@@ -241,6 +284,30 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // Grace period for decode errors (code 3 = MEDIA_ERR_DECODE). The
+        // browser sometimes conceals corruption on its own and resumes within
+        // a few hundred ms; waiting avoids an unnecessary reload/skip that
+        // would interrupt audio. Code 4 (NETWORK/SRC) never self-heals.
+        if (err.code === 3 && !state.recoveryTimer) {
+            state.recoveryTimer = setTimeout(() => {
+                state.recoveryTimer = null;
+                const tNow = player.currentTime() || 0;
+                if (tNow > ct + 0.1 && !player.error()) {
+                    console.log('[player] decode error self-healed, no skip needed');
+                    return;
+                }
+                performSkipRecovery();
+            }, 500);
+            return;
+        }
+
+        performSkipRecovery();
+    }
+
+    function performSkipRecovery() {
+        const ct = player.currentTime() || 0;
+        const anchor = Math.max(state.lastGoodTime, ct);
+
         state.skipAttempts++;
         state.lastRecoveryAt = Date.now();
         const myAttempt = state.skipAttempts;
@@ -249,16 +316,46 @@ document.addEventListener('DOMContentLoaded', () => {
         const seekTo = anchor + skipDistance;
         console.warn(`[player] recovery #${myAttempt}: skipping ${skipDistance}s -> ${seekTo.toFixed(1)}s`);
 
+        // Nuclear recovery: after repeated failures, restart ffmpeg from the
+        // target time via ?start=. Only useful for pipe modes (remux/transcode
+        // without a cache hit) — the standard Range-based seek below can't
+        // escape a corrupt region on a non-seekable pipe. Direct and cached
+        // remux keep using Range seek (faster, no restart cost).
+        const strategy = state.streamStrategies[state.currentStrategyIndex];
+        if (strategy !== 'direct' && myAttempt >= 3) {
+            nuclearReseek(seekTo);
+            return;
+        }
+
         const src = player.currentSrc();
         player.one('loadedmetadata', () => {
             // A newer attempt has been queued: bail and let it handle the seek.
             if (state.skipAttempts !== myAttempt) return;
             player.currentTime(seekTo);
+            // video.js clears remote text tracks when src changes, even when
+            // the new URL is identical. Re-attach them after the reload.
+            for (const sub of state.subs) mountSubtitleTrack(sub);
             player.play().catch(() => {});
         });
         player.src({ src, type: 'video/mp4' });
 
         if (myAttempt === 1) toast('Skipping corrupted region...');
+    }
+
+    function nuclearReseek(t) {
+        state.playbackOffset = t;
+        const strategy = state.streamStrategies[state.currentStrategyIndex];
+        const safePath = state.currentVideoPath.startsWith('/') ? state.currentVideoPath.substring(1) : state.currentVideoPath;
+        const url = `/api/v1/stream/${encodeURIComponent(safePath)}?strategy=${strategy}&start=${t}&token=${encodeURIComponent(state.sessionToken)}`;
+        console.warn(`[player] nuclear reseek -> ffmpeg restart at ${t.toFixed(1)}s`);
+        toast('Restarting stream past corruption...');
+        player.one('loadedmetadata', () => {
+            // Re-mount subs AFTER the reload (video.js clears tracks on src change).
+            // The shift uses playbackOffset so cues line up with the restarted stream.
+            for (const sub of state.subs) mountSubtitleTrack(sub);
+            player.play().catch(() => {});
+        });
+        player.src({ src: url, type: 'video/mp4' });
     }
 
     // Safari often fails silently (no 'error' event) for unsupported codecs/containers.
@@ -291,9 +388,26 @@ document.addEventListener('DOMContentLoaded', () => {
         const strategy = state.streamStrategies[state.currentStrategyIndex];
         const safePath = path.startsWith('/') ? path.substring(1) : path;
         state.currentVideoPath = path;
+        state.knownDuration = 0;
+        state.playbackOffset = 0;
         hideNextEpisodePrompt();
         showLoading(`Loading (${strategy})...`);
         armLoadWatchdog(strategy);
+
+        // For strategies that stream via pipe (remux/transcode), the player can't
+        // read the total duration from the fMP4 moov. Pre-probe it and override.
+        if (strategy !== 'direct') {
+            fetchWithAuth(`/api/v1/duration/${encodeURIComponent(safePath)}`)
+                .then(r => r.ok ? r.json() : null)
+                .then(d => {
+                    if (d?.seconds > 0) {
+                        state.knownDuration = d.seconds;
+                        player.trigger('durationchange');
+                    }
+                })
+                .catch(() => {});
+        }
+
         try {
             const videoUrl = `/api/v1/stream/${encodeURIComponent(safePath)}?strategy=${strategy}&token=${encodeURIComponent(state.sessionToken)}`;
             player.src({ src: videoUrl, type: 'video/mp4' });
@@ -340,7 +454,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function closeModal() {
-        videoPlayerModal.style.display = 'none'; player.pause(); player.off('error', handleVideoError); player.off('timeupdate', trackPlaybackProgress); clearLoadWatchdog();
+        videoPlayerModal.style.display = 'none'; player.pause(); player.off('error', handleVideoError); player.off('timeupdate', trackPlaybackProgress); player.off('loadedmetadata', applyKnownDuration); clearLoadWatchdog();
+        if (state.recoveryTimer) { clearTimeout(state.recoveryTimer); state.recoveryTimer = null; }
+        state.knownDuration = 0;
         const src = player.currentSrc();
         if (src?.startsWith('blob:')) URL.revokeObjectURL(src);
         player.src('');
@@ -410,7 +526,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (entry.blobUrl) URL.revokeObjectURL(entry.blobUrl);
 
-        const shiftedText = shiftVttText(entry.vttText, state.subtitleOffset);
+        const shiftedText = shiftVttText(entry.vttText, state.subtitleOffset - (state.playbackOffset || 0));
         entry.blobUrl = URL.createObjectURL(new Blob([shiftedText], { type: 'text/vtt' }));
         entry.trackEl = player.addRemoteTextTrack({
             kind: 'subtitles',
@@ -437,6 +553,162 @@ document.addEventListener('DOMContentLoaded', () => {
     $('sub-offset-minus').addEventListener('click', () => setSubtitleOffset(state.subtitleOffset - 0.1));
     $('sub-offset-plus').addEventListener('click', () => setSubtitleOffset(state.subtitleOffset + 0.1));
     $('sub-offset-reset').addEventListener('click', () => setSubtitleOffset(0));
+
+    // --- Interactive subtitle search ---
+    const subSearchModal = $('sub-search-modal');
+    const subSearchResults = $('sub-search-results');
+    const subSearchQuery = $('sub-search-query');
+    const subSearchLang = $('sub-search-lang');
+
+    function openSubSearch() {
+        if (!state.currentVideoPath) return;
+        subSearchQuery.value = '';
+        subSearchResults.innerHTML = '<div class="empty">Press Search to look up subtitles for the current video.</div>';
+        subSearchModal.style.display = 'flex';
+        setTimeout(() => subSearchQuery.focus(), 50);
+    }
+    function closeSubSearch() { subSearchModal.style.display = 'none'; }
+
+    function escapeHtml(s) {
+        return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    function renderSubResults(results) {
+        if (!results.length) {
+            subSearchResults.innerHTML = '<div class="empty">No subtitles found. Try a different query or language.</div>';
+            return;
+        }
+        // Sort: hash matches first, then by downloads desc.
+        results.sort((a, b) => (b.moviehash_match - a.moviehash_match) || (b.downloads - a.downloads));
+
+        subSearchResults.innerHTML = results.map((r, idx) => {
+            const tags = [];
+            if (r.moviehash_match) tags.push('<span class="tag hash">✓ Hash match</span>');
+            if (r.from_trusted) tags.push('<span class="tag trusted">Trusted</span>');
+            if (r.hd) tags.push('<span class="tag hd">HD</span>');
+            if (r.fps) tags.push(`<span class="tag">${r.fps.toFixed(2)} fps</span>`);
+            if (r.downloads) tags.push(`<span class="tag">${r.downloads.toLocaleString()} downloads</span>`);
+            if (r.rating > 0) tags.push(`<span class="tag">★ ${r.rating.toFixed(1)}</span>`);
+            if (r.hearing_impaired) tags.push('<span class="tag">SDH</span>');
+            if (r.ai_translated) tags.push('<span class="tag warn">AI translated</span>');
+            if (r.machine_translated) tags.push('<span class="tag warn">Machine translated</span>');
+            if (r.uploader) tags.push(`<span class="tag">${escapeHtml(r.uploader)}</span>`);
+
+            return `<div class="sub-result ${r.moviehash_match ? 'hash-match' : ''}" data-idx="${idx}">
+                <div class="sub-result-main">
+                    <div class="sub-result-name">${escapeHtml(r.file_name)}</div>
+                    ${r.release ? `<div class="sub-result-release">${escapeHtml(r.release)}</div>` : ''}
+                    <div class="sub-result-meta">${tags.join('')}</div>
+                </div>
+                <div class="sub-result-actions">
+                    <button class="primary" data-action="download" data-idx="${idx}">Download</button>
+                </div>
+            </div>`;
+        }).join('');
+
+        // Stash results for the action handler.
+        subSearchResults.dataset.results = JSON.stringify(results);
+    }
+
+    async function runSubSearch() {
+        if (!state.currentVideoPath) return;
+        subSearchResults.innerHTML = '<div class="loading">Searching…</div>';
+        try {
+            const resp = await fetchWithAuth(
+                `/api/v1/subtitles-search/${encodeURIComponent(state.currentVideoPath)}`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        query: subSearchQuery.value.trim(),
+                        languages: [subSearchLang.value]
+                    })
+                }
+            );
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({}));
+                subSearchResults.innerHTML = `<div class="empty">Search failed: ${escapeHtml(err.error || resp.statusText)}</div>`;
+                return;
+            }
+            renderSubResults(await resp.json());
+        } catch (e) {
+            subSearchResults.innerHTML = `<div class="empty">Search error: ${escapeHtml(e.message)}</div>`;
+        }
+    }
+
+    async function downloadSelectedSubtitle(idx, btn) {
+        let results;
+        try { results = JSON.parse(subSearchResults.dataset.results || '[]'); } catch { results = []; }
+        const r = results[idx];
+        if (!r || !state.currentVideoPath) return;
+
+        const orig = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Downloading…';
+        try {
+            const resp = await fetchWithAuth(
+                `/api/v1/subtitles-download/${encodeURIComponent(state.currentVideoPath)}`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ file_id: r.file_id, language: r.language || subSearchLang.value })
+                }
+            );
+            const data = await resp.json();
+            if (!resp.ok) {
+                toast(`Download failed: ${data.error || resp.statusText}`, 'error');
+                btn.disabled = false; btn.textContent = orig;
+                return;
+            }
+            toast(`Downloaded: ${data.filename}`, 'success');
+            btn.textContent = '✓ Downloaded';
+            await reloadSubtitleTracks(data.language);
+            setTimeout(closeSubSearch, 500);
+        } catch (e) {
+            toast(`Download error: ${e.message}`, 'error');
+            btn.disabled = false; btn.textContent = orig;
+        }
+    }
+
+    // Replace the player's text tracks with whatever is currently on disk,
+    // preserving the active subtitle offset, and switch to the freshly downloaded language.
+    async function reloadSubtitleTracks(preferredLang) {
+        if (!state.currentVideoPath) return;
+        clearSubtitleTracks();
+        try {
+            const safePath = state.currentVideoPath;
+            const subs = await (await fetchWithAuth(`/api/v1/subtitles-list/${encodeURIComponent(safePath)}`)).json();
+            for (const sub of (subs || [])) {
+                const subResp = await fetchWithAuth(`/api/v1/subtitles/${encodeURIComponent(safePath)}?lang=${sub.language}`);
+                if (!subResp.ok) continue;
+                const vttText = await subResp.text();
+                const entry = {
+                    language: sub.language,
+                    label: sub.label,
+                    default: sub.language === preferredLang,
+                    vttText,
+                    blobUrl: null,
+                    trackEl: null
+                };
+                mountSubtitleTrack(entry);
+                state.subs.push(entry);
+            }
+            if (state.subs.length) $('sub-offset-bar').classList.add('visible');
+        } catch {}
+    }
+
+    $('sub-search-btn').addEventListener('click', openSubSearch);
+    $('sub-search-close').addEventListener('click', closeSubSearch);
+    $('sub-search-go').addEventListener('click', runSubSearch);
+    subSearchQuery.addEventListener('keydown', e => { if (e.key === 'Enter') runSubSearch(); });
+    subSearchResults.addEventListener('click', e => {
+        const btn = e.target.closest('button[data-action="download"]');
+        if (btn) downloadSelectedSubtitle(Number(btn.dataset.idx), btn);
+    });
+    subSearchModal.addEventListener('click', e => { if (e.target === subSearchModal) closeSubSearch(); });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && subSearchModal.style.display === 'flex') closeSubSearch();
+    });
 
     // --- Next Episode ---
     const VIDEO_EXTS = ['.mkv', '.mp4', '.avi', '.m4v', '.mov', '.webm'];
@@ -520,17 +792,17 @@ document.addEventListener('DOMContentLoaded', () => {
         finally { btn.innerHTML = origHTML; btn.disabled = false; }
     }
     window.setView = function(mode) {
+        applyViewMode(mode);
+        if (state.prefs) {
+            state.prefs.view = mode;
+            savePrefs();
+        }
+    };
+    function applyViewMode(mode) {
         const grid = $('file-browser');
         $('view-grid').classList.toggle('active', mode === 'grid');
         $('view-list').classList.toggle('active', mode === 'list');
         grid.classList.toggle('list-view', mode === 'list');
-        localStorage.setItem('rms-view', mode);
-    };
-    // Restore saved view preference
-    if (localStorage.getItem('rms-view') === 'list') {
-        $('file-browser').classList.add('list-view');
-        $('view-list')?.classList.add('active');
-        $('view-grid')?.classList.remove('active');
     }
 
     window.crawlMetadata = () => runCrawl('metadata', 'btn-crawl-metadata', 'Metadata');
@@ -559,7 +831,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Server config & per-user preferences ---
     const DEFAULT_PREFS = {
         strategy: 'direct',
-        subSize: 'm', subFont: 'sans', subColor: '#ffffff', subBg: 'semi', subEdge: 'outline'
+        subSize: 'm', subFont: 'sans', subColor: '#ffffff', subBg: 'semi', subEdge: 'outline',
+        view: 'grid'
     };
 
     async function loadServerConfig() {
@@ -594,6 +867,7 @@ document.addEventListener('DOMContentLoaded', () => {
             : state.serverStrategies.slice();
         applySubtitleStyle();
         applySubtitlePreview();
+        applyViewMode(state.prefs.view || 'grid');
         syncSettingsControls();
     }
 
@@ -629,7 +903,15 @@ document.addEventListener('DOMContentLoaded', () => {
             styleEl.id = 'rms-cue-style';
             document.head.appendChild(styleEl);
         }
-        styleEl.textContent = `::cue { color: ${s.color}; background-color: ${s.background}; font-family: ${s.font}; font-size: ${s.size}; text-shadow: ${s.edge}; }`;
+        // video.js 8 renders cues via vtt.js polyfill: cues live in `.vjs-text-track-cue > div`
+        // with inline styles from vtt.js (and previously TextTrackSettings). ::cue does not
+        // apply since these aren't native browser cues, so we target the inline-styled div
+        // directly with !important to win over vtt.js defaults.
+        const cueRule = `color: ${s.color} !important; background-color: ${s.background} !important; font-family: ${s.font} !important; font-size: ${s.size} !important; text-shadow: ${s.edge} !important;`;
+        styleEl.textContent = `
+            .vjs-text-track-cue, .vjs-text-track-cue > * { ${cueRule} }
+            ::cue { ${cueRule} }
+        `;
     }
 
     function applySubtitlePreview() {

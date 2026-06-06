@@ -5,6 +5,12 @@ app:
   ui_password: "${RMS_PASSWORD}"
   jwt_secret: "${RMS_JWT_SECRET}"
   jellyfin_version: "10.10.7"
+  # Optional: enable on-disk remux cache so subsequent plays of remuxed files
+  # are served via http.ServeFile and support seek/Range. First play still
+  # streams live (no seek); the cache builds in the background and is used on
+  # later plays. Unset cache_path to disable. Default cache_max_gb is 10.
+  # cache_path: "./cache"
+  # cache_max_gb: 10
   debug: false
 
 player:

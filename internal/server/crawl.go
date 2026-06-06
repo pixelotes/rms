@@ -28,25 +28,28 @@ func (s *Server) handleDuration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try episode NFO first
+	// ffprobe first for precise seconds (cached + concurrency-limited).
+	// NFO Runtime is rounded to minutes, which makes the player progress bar
+	// drift (e.g. a 23m41s episode reports as 23:00 in remux/transcode mode
+	// where we rely on this endpoint instead of the file's moov atom).
 	var minutes int
-	if nfo, err := media.ParseEpisodeNFO(filePath); err == nil {
+	var seconds float64
+	if secs := media.ProbeDuration(filePath); secs > 0 {
+		seconds = secs
+		minutes = int(secs) / 60
+		media.UpdateEpisodeRuntime(filePath, minutes)
+	} else if nfo, err := media.ParseEpisodeNFO(filePath); err == nil {
+		// Fallback when ffprobe unavailable or fails.
 		if nfo.StreamDetails != nil && nfo.StreamDetails.DurationSeconds > 0 {
+			seconds = float64(nfo.StreamDetails.DurationSeconds)
 			minutes = nfo.StreamDetails.DurationSeconds / 60
 		} else if nfo.Runtime > 0 {
+			seconds = float64(nfo.Runtime * 60)
 			minutes = nfo.Runtime
 		}
 	}
-	// Fallback to ffprobe (cached + concurrency-limited inside media.ProbeDuration)
-	if minutes == 0 {
-		secs := media.ProbeDuration(filePath)
-		if secs > 0 {
-			minutes = int(secs) / 60
-			media.UpdateEpisodeRuntime(filePath, minutes)
-		}
-	}
 
-	respondJSON(w, http.StatusOK, map[string]interface{}{"minutes": minutes})
+	respondJSON(w, http.StatusOK, map[string]interface{}{"minutes": minutes, "seconds": seconds})
 }
 
 func (s *Server) handleCrawlMetadata(w http.ResponseWriter, r *http.Request) {

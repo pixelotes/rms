@@ -15,17 +15,19 @@ import (
 )
 
 type Server struct {
-	config     *config.Config
-	httpServer *http.Server
-	router     *mux.Router
-	userData   *UserDataStore
-	syncQueue  *SyncQueueStore
+	config      *config.Config
+	httpServer  *http.Server
+	router      *mux.Router
+	userData    *UserDataStore
+	syncQueue   *SyncQueueStore
+	streamCache *streamCache
 }
 
 func New(cfg *config.Config) *Server {
 	s := &Server{config: cfg}
 	s.userData = NewUserDataStore(cfg.App.UserdataPath)
 	s.syncQueue = NewSyncQueueStore()
+	s.streamCache = newStreamCache(cfg.App.CachePath, cfg.App.CacheMaxGB)
 	s.router = mux.NewRouter()
 	if cfg.App.Debug {
 		s.router.Use(loggingMiddleware)
@@ -74,6 +76,8 @@ func (s *Server) registerRoutes() {
 	protected.HandleFunc("/stream/{filePath:.+}", s.handleStream).Methods("GET")
 	protected.HandleFunc("/subtitles/{filePath:.+}", s.handleSubtitles).Methods("GET")
 	protected.HandleFunc("/subtitles-list/{filePath:.+}", s.handleSubtitlesList).Methods("GET")
+	protected.HandleFunc("/subtitles-search/{filePath:.+}", s.handleSearchSubtitles).Methods("POST")
+	protected.HandleFunc("/subtitles-download/{filePath:.+}", s.handleDownloadSubtitle).Methods("POST")
 	protected.HandleFunc("/images/{imageId}", s.handleImage).Methods("GET")
 	protected.HandleFunc("/duration/{filePath:.+}", s.handleDuration).Methods("GET")
 	protected.HandleFunc("/crawl/metadata", s.handleCrawlMetadata).Methods("POST")

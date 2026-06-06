@@ -63,6 +63,8 @@ type AppConfig struct {
 	JellyfinVersion string `yaml:"jellyfin_version"`
 	KodiSyncQueue   bool   `yaml:"kodi_sync_queue"`
 	UserdataPath    string `yaml:"userdata_path"`
+	CachePath       string `yaml:"cache_path"`
+	CacheMaxGB      int    `yaml:"cache_max_gb"`
 	Debug           bool   `yaml:"debug"`
 }
 
@@ -155,6 +157,9 @@ func (c *Config) setDefaults() {
 	}
 	if c.Crawlers.AutoScan.IntervalHours == 0 {
 		c.Crawlers.AutoScan.IntervalHours = 24
+	}
+	if c.App.CacheMaxGB == 0 {
+		c.App.CacheMaxGB = 10
 	}
 	if len(c.Crawlers.Metadata.AnimeProviders) == 0 {
 		c.Crawlers.Metadata.AnimeProviders = []string{"anilist"}

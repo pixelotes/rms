@@ -5,159 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Raspberry Media Server</title>
     <link href="/css/video-js.css" rel="stylesheet" />
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { background: #0a0a0a; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-        a { color: #b0b0b0; text-decoration: none; }
-        a:hover { color: #fff; }
-
-        /* --- Background & Layout --- */
-        .bg-image { position: fixed; top: 0; left: 0; width: 100%; height: 60vh; background-size: cover; background-position: center top; opacity: 0; transition: opacity 1.5s; z-index: 0; }
-        .bg-image.visible { opacity: 1; }
-        .bg-image::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 100%; background: linear-gradient(to top, #0a0a0a 0%, rgba(10,10,10,0.8) 40%, rgba(10,10,10,0.3) 100%); }
-        .container { position: relative; z-index: 1; max-width: 1400px; margin: 0 auto; padding: 0 24px; min-height: 100vh; }
-
-        /* --- Login --- */
-        #login-screen { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-        #login-form { background: #161616; border: 1px solid #222; border-radius: 12px; padding: 40px; width: 340px; text-align: center; }
-        #login-form h2 { font-size: 22px; margin-bottom: 24px; color: #fff; }
-        #login-form .logo-icon { font-size: 48px; margin-bottom: 12px; display: block; }
-        #login-form input { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #333; background: #1a1a1a; color: #fff; font-size: 15px; margin-bottom: 16px; outline: none; }
-        #login-form input:focus { border-color: #c62828; }
-        #login-form button { width: 100%; padding: 12px; border-radius: 8px; border: none; background: #c62828; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
-        #login-form button:hover { background: #e53935; }
-        #login-error { color: #ef5350; margin-top: 10px; font-size: 13px; }
-
-        /* --- Header --- */
-        header { padding: 20px 0 10px; }
-        .header-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-        .header-logo { display: flex; align-items: center; gap: 8px; font-size: 20px; font-weight: 700; color: #fff; white-space: nowrap; }
-        .header-logo svg { width: 28px; height: 28px; }
-        #search-input { flex: 1; padding: 10px 16px; border-radius: 8px; border: 1px solid #333; background: #161616; color: #fff; font-size: 14px; outline: none; }
-        #search-input:focus { border-color: #c62828; }
-        #breadcrumb { font-size: 13px; color: #888; padding: 4px 0 12px; border-bottom: 1px solid #1a1a1a; }
-        #breadcrumb a { color: #aaa; }
-        #breadcrumb a:hover { color: #fff; }
-
-        /* --- Metadata Hero --- */
-        .meta-hero { position: relative; padding: 24px 0 20px; }
-        .meta-hero .meta-logo { max-height: 80px; margin-bottom: 12px; display: block; }
-        .meta-hero h2 { font-size: 28px; font-weight: 700; color: #fff; margin-bottom: 4px; display: flex; align-items: center; gap: 12px; }
-        .back-btn { color: #888; font-size: 24px; text-decoration: none; width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; background: rgba(255,255,255,0.06); transition: all 0.2s; flex-shrink: 0; }
-        .back-btn:hover { color: #fff; background: rgba(255,255,255,0.12); }
-        .meta-hero .meta-year { color: #999; font-size: 15px; margin-bottom: 12px; }
-        .meta-hero .meta-plot { color: #ccc; line-height: 1.7; font-size: 14px; margin-bottom: 16px; max-width: 800px; }
-        .meta-badges { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
-        .badge { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; }
-        .badge-rating { background: rgba(255, 215, 0, 0.15); color: #ffd700; }
-        .badge-runtime { background: rgba(255, 255, 255, 0.08); color: #bbb; }
-        .badge-studio { background: rgba(255, 255, 255, 0.08); color: #bbb; }
-        .badge-genre { background: rgba(198, 40, 40, 0.2); color: #ef9a9a; }
-
-        /* --- Action Buttons --- */
-        .action-bar { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 0; }
-        .action-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 8px; border: 1px solid #333; background: #161616; color: #ccc; font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
-        .action-btn:hover { background: #222; color: #fff; border-color: #555; }
-        .action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-        .action-btn svg { width: 14px; height: 14px; }
-
-        /* --- File Grid (default) --- */
-        .file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 16px; padding: 16px 0 40px; }
-        .file-item { background: #141414; border-radius: 8px; overflow: hidden; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; }
-        .file-item:hover { transform: translateY(-4px); box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
-        .item-poster { aspect-ratio: 2/3; background: #1a1a1a; display: flex; align-items: center; justify-content: center; color: #444; font-size: 32px; overflow: hidden; }
-        .item-poster img { width: 100%; height: 100%; object-fit: cover; }
-        .item-info { padding: 10px; }
-        .item-name { font-size: 13px; font-weight: 600; color: #ddd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .item-year { font-size: 11px; color: #777; margin-top: 2px; }
-        .item-subs { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 6px; }
-        .sub-tag { padding: 1px 5px; border-radius: 4px; font-size: 10px; background: rgba(100, 140, 255, 0.15); color: #8ab4ff; }
-        .back-item { background: none; border: 1px dashed #333; display: flex; align-items: center; justify-content: center; min-height: 80px; }
-        .back-item .item-poster { aspect-ratio: auto; font-size: 18px; background: none; color: #666; }
-        .back-item .item-info { display: none; }
-        .back-item:hover { background: rgba(255,255,255,0.03); transform: none; box-shadow: none; }
-
-        /* --- List View --- */
-        .file-grid.list-view { grid-template-columns: 1fr; gap: 4px; }
-        .file-grid.list-view .file-item { display: flex; align-items: center; border-radius: 6px; background: #111; }
-        .file-grid.list-view .file-item:hover { transform: none; box-shadow: none; background: #1a1a1a; }
-        .file-grid.list-view .item-poster { aspect-ratio: 16/9; width: 120px; flex-shrink: 0; border-radius: 4px; font-size: 18px; }
-        .file-grid.list-view .item-info { flex: 1; padding: 8px 12px; min-width: 0; }
-        .file-grid.list-view .item-name { white-space: normal; font-size: 14px; }
-        .file-grid.list-view .item-subs { margin-top: 4px; }
-        .file-grid.list-view .back-item { min-height: 48px; border: 1px dashed #333; background: none; justify-content: flex-start; padding-left: 16px; }
-        .file-grid.list-view .back-item .item-poster { width: auto; }
-
-        /* --- View Toggle --- */
-        .view-toggle { display: inline-flex; border: 1px solid #333; border-radius: 6px; overflow: hidden; margin-left: auto; }
-        .view-toggle button { background: none; border: none; color: #666; padding: 6px 10px; cursor: pointer; display: flex; align-items: center; }
-        .view-toggle button.active { background: #222; color: #fff; }
-        .view-toggle button:hover { color: #aaa; }
-        .view-toggle svg { width: 16px; height: 16px; }
-
-        /* --- Toast Messages --- */
-        .toast { position: fixed; top: 20px; right: 20px; padding: 12px 20px; border-radius: 8px; font-size: 13px; font-weight: 500; z-index: 10000; animation: slideIn 0.3s ease-out; }
-        .toast-success { background: #1b5e20; color: #a5d6a7; }
-        .toast-error { background: #b71c1c; color: #ef9a9a; }
-        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-
-        /* --- Loading --- */
-        .loading-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 10000; }
-        .spinner { width: 36px; height: 36px; border: 3px solid #333; border-top-color: #c62828; border-radius: 50%; animation: spin 0.8s linear infinite; margin-bottom: 16px; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .loading-text { font-size: 14px; color: #aaa; }
-
-        /* --- Video Modal --- */
-        .modal-backdrop { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); z-index: 9999; align-items: center; justify-content: center; }
-        .modal-content { width: 90%; max-width: 1200px; position: relative; }
-        .modal-close { position: absolute; top: -40px; right: 0; font-size: 28px; color: #888; cursor: pointer; z-index: 1; }
-        .modal-close:hover { color: #fff; }
-
-        .strategy-indicator { position: fixed; top: 20px; right: 20px; background: #1a1a1a; color: #aaa; padding: 8px 14px; border-radius: 8px; font-size: 12px; z-index: 1000; display: none; border: 1px solid #333; }
-        .strategy-indicator.show { display: block; animation: slideIn 0.3s ease-out; }
-
-        /* --- Subtitle Offset Bar --- */
-        #sub-offset-bar { display: none; align-items: center; gap: 10px; padding: 8px 12px; margin-top: 8px; background: #141414; border: 1px solid #222; border-radius: 8px; color: #ccc; font-size: 13px; flex-wrap: wrap; }
-        #sub-offset-bar.visible { display: flex; }
-        #sub-offset-bar .sub-offset-row { display: inline-flex; align-items: center; gap: 8px; flex: 1; min-width: 200px; }
-        #sub-offset-bar .sub-offset-label { color: #bbb; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-        #sub-offset-bar .sub-offset-label svg { width: 14px; height: 14px; }
-        #sub-offset-slider { flex: 1; accent-color: #c62828; min-width: 100px; }
-        #sub-offset-bar .sub-offset-btn { padding: 4px 10px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #ccc; cursor: pointer; font-size: 13px; font-weight: 600; min-width: 30px; }
-        #sub-offset-bar .sub-offset-btn:hover { background: #222; color: #fff; }
-        #sub-offset-value { min-width: 58px; text-align: center; color: #fff; font-variant-numeric: tabular-nums; font-size: 12px; }
-
-        /* --- Settings Modal --- */
-        .icon-btn { background: #161616; border: 1px solid #333; border-radius: 8px; color: #ccc; width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; transition: all 0.2s; }
-        .icon-btn:hover { background: #222; color: #fff; border-color: #555; }
-        .icon-btn svg { width: 18px; height: 18px; }
-        .settings-content { background: #141414; border: 1px solid #2a2a2a; border-radius: 12px; padding: 22px 24px 24px; width: 92%; max-width: 460px; max-height: 88vh; overflow-y: auto; position: relative; }
-        .settings-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
-        .settings-header h3 { color: #fff; font-size: 17px; font-weight: 600; }
-        .settings-header .modal-close { position: static; font-size: 24px; }
-        .settings-section { padding: 12px 0; border-top: 1px solid #222; }
-        .settings-section:first-of-type { border-top: none; padding-top: 0; }
-        .settings-section-title { color: #aaa; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
-        .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; font-size: 13px; color: #ccc; }
-        .settings-row select, .settings-row input[type="color"] { background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #eee; padding: 6px 8px; font-size: 13px; min-width: 160px; }
-        .settings-row input[type="color"] { padding: 2px; height: 30px; min-width: 60px; cursor: pointer; }
-        .settings-hint { font-size: 11px; color: #777; margin-top: 6px; }
-        .sub-preview { margin-top: 12px; padding: 18px 12px; background: linear-gradient(135deg, #1a2a45 0%, #2a1a35 100%); border-radius: 8px; text-align: center; min-height: 64px; display: flex; align-items: center; justify-content: center; }
-        .sub-preview span { display: inline-block; padding: 4px 8px; }
-
-        /* --- Next Episode Prompt --- */
-        #next-ep-prompt { display: none; position: absolute; right: 16px; bottom: 72px; background: rgba(20,20,20,0.95); border: 1px solid #333; border-radius: 10px; padding: 14px 16px; min-width: 260px; max-width: 360px; box-shadow: 0 8px 24px rgba(0,0,0,0.6); z-index: 5; }
-        #next-ep-prompt.visible { display: block; animation: slideIn 0.3s ease-out; }
-        #next-ep-prompt .next-ep-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
-        #next-ep-prompt .next-ep-title { font-size: 14px; color: #fff; margin-bottom: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        #next-ep-prompt .next-ep-actions { display: flex; gap: 8px; }
-        #next-ep-prompt button { flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid #333; background: #1a1a1a; color: #ddd; font-size: 13px; font-weight: 600; cursor: pointer; }
-        #next-ep-prompt button.primary { background: #c62828; border-color: #c62828; color: #fff; }
-        #next-ep-prompt button.primary:hover { background: #e53935; }
-        #next-ep-prompt button:hover { background: #222; }
-        #next-ep-prompt .next-ep-countdown { font-variant-numeric: tabular-nums; }
-
-    </style>
+    <link href="/css/styles.css" rel="stylesheet" />
 </head>
 <body>
     <div class="bg-image" id="bg-image"></div>
@@ -225,8 +73,11 @@
     <div id="video-player-modal" class="modal-backdrop">
         <div class="modal-content">
             <span class="modal-close">&times;</span>
-            <video id="video-player" class="video-js vjs-big-play-centered vjs-fluid" controls preload="auto" data-setup='{"fluid": true}'></video>
+            <video id="video-player" class="video-js vjs-big-play-centered vjs-fluid" controls preload="auto"></video>
             <div id="sub-offset-bar">
+                <button class="sub-offset-btn sub-search-btn" id="sub-search-btn" title="Search and download subtitles">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+                </button>
                 <div class="sub-offset-row">
                     <span class="sub-offset-label">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h2m2 0h6"/></svg>
@@ -249,6 +100,38 @@
                     <button id="next-ep-play" class="primary">Play now</button>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <div id="sub-search-modal" class="modal-backdrop">
+        <div class="sub-search-content">
+            <div class="settings-header">
+                <h3>Find subtitles</h3>
+                <span class="modal-close" id="sub-search-close">&times;</span>
+            </div>
+            <div class="sub-search-row">
+                <input type="text" id="sub-search-query" placeholder="Search by title (leave blank to use file hash + filename)">
+                <select id="sub-search-lang">
+                    <option value="en" selected>English</option>
+                    <option value="es">Spanish</option>
+                    <option value="fr">French</option>
+                    <option value="de">German</option>
+                    <option value="it">Italian</option>
+                    <option value="pt">Portuguese</option>
+                    <option value="ru">Russian</option>
+                    <option value="ja">Japanese</option>
+                    <option value="ko">Korean</option>
+                    <option value="zh">Chinese</option>
+                    <option value="ar">Arabic</option>
+                    <option value="nl">Dutch</option>
+                    <option value="pl">Polish</option>
+                    <option value="sv">Swedish</option>
+                    <option value="tr">Turkish</option>
+                </select>
+                <button id="sub-search-go" class="action-btn">Search</button>
+            </div>
+            <div class="sub-search-hint" id="sub-search-hint">Tip: a green badge means the subtitle matched your file's hash — pick those first.</div>
+            <div class="sub-search-results" id="sub-search-results"></div>
         </div>
     </div>
 

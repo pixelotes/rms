@@ -2,6 +2,7 @@ package subtitles
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,10 +13,13 @@ import (
 	"time"
 )
 
+var errNoAPIKeyErr = errors.New(errNoAPIKey)
+
 const (
 	baseURL     = "https://api.opensubtitles.com/api/v1"
 	downloadURL = "https://api.opensubtitles.com/api/v1/download"
 	userAgent   = "rms-subcrawler v1.0"
+	errNoAPIKey = "OpenSubtitles API key not configured"
 )
 
 type Client struct {
@@ -25,17 +29,54 @@ type Client struct {
 	rateLimiter *rateLimiter
 }
 
-type subtitle struct {
-	Language string
-	FileID   int
-	FileName string
+// SearchResult is a single subtitle candidate returned by OpenSubtitles,
+// with the metadata needed to make an informed choice in the UI.
+type SearchResult struct {
+	Language        string  `json:"language"`
+	FileID          int     `json:"file_id"`
+	FileName        string  `json:"file_name"`
+	Release         string  `json:"release"`
+	Uploader        string  `json:"uploader"`
+	Downloads       int     `json:"downloads"`
+	Rating          float64 `json:"rating"`
+	Votes           int     `json:"votes"`
+	FPS             float64 `json:"fps"`
+	HD              bool    `json:"hd"`
+	HearingImpaired bool    `json:"hearing_impaired"`
+	MovieHashMatch  bool    `json:"moviehash_match"`
+	FromTrusted     bool    `json:"from_trusted"`
+	AITranslated    bool    `json:"ai_translated"`
+	MachineTrans    bool    `json:"machine_translated"`
+	UploadDate      string  `json:"upload_date"`
+}
+
+// SearchOpts controls how subtitle candidates are looked up.
+type SearchOpts struct {
+	VideoPath string   // used for hash + filename fallback
+	Query     string   // optional override; empty derives from VideoPath
+	Languages []string // optional override; empty uses client default
 }
 
 type osResponse struct {
 	Data []struct {
 		Attributes struct {
-			Language string `json:"language"`
-			Files    []struct {
+			Language         string  `json:"language"`
+			DownloadCount    int     `json:"download_count"`
+			HearingImpaired  bool    `json:"hearing_impaired"`
+			HD               bool    `json:"hd"`
+			FPS              float64 `json:"fps"`
+			Votes            int     `json:"votes"`
+			Ratings          float64 `json:"ratings"`
+			FromTrusted      bool    `json:"from_trusted"`
+			UploadDate       string  `json:"upload_date"`
+			AITranslated     bool    `json:"ai_translated"`
+			MachineTranslated bool   `json:"machine_translated"`
+			Release          string  `json:"release"`
+			MovieHashMatch   bool    `json:"moviehash_match"`
+			Uploader         struct {
+				Name string `json:"name"`
+			} `json:"uploader"`
+			Files []struct {
 				FileID   int    `json:"file_id"`
 				FileName string `json:"file_name"`
 			} `json:"files"`
@@ -59,29 +100,27 @@ func NewClient(apiKey string, languages []string) *Client {
 	}
 }
 
-// ProcessFile searches and downloads subtitles for a single video file.
+// ProcessFile searches and downloads subtitles for a single video file
+// (batch crawler entry point: hash-then-filename, missing languages only).
 // Returns the number of subtitles downloaded, the number of missing languages, and any error.
 func (c *Client) ProcessFile(videoPath string) (int, int, error) {
 	if c.apiKey == "" {
-		return 0, 0, fmt.Errorf("OpenSubtitles API key not configured")
+		return 0, 0, errNoAPIKeyErr
 	}
 
 	videoBase := strings.TrimSuffix(filepath.Base(videoPath), filepath.Ext(videoPath))
 	videoDir := filepath.Dir(videoPath)
 
-	// Check which languages we already have
 	missing := c.missingLanguages(videoDir, videoBase)
 	if len(missing) == 0 {
 		return 0, 0, nil
 	}
 
-	// Search by hash first, then by filename
-	subs, err := c.search(videoPath, missing)
+	subs, err := c.Search(SearchOpts{VideoPath: videoPath, Languages: missing})
 	if err != nil {
 		return 0, len(missing), err
 	}
 
-	// Download one subtitle per missing language
 	downloaded := 0
 	for _, lang := range missing {
 		sub := findForLanguage(subs, lang)
@@ -89,10 +128,12 @@ func (c *Client) ProcessFile(videoPath string) (int, int, error) {
 			continue
 		}
 
-		ext := ".srt"
-		destPath := filepath.Join(videoDir, videoBase+"."+lang+ext)
+		destPath := filepath.Join(videoDir, videoBase+"."+lang+".srt")
+		if _, err := os.Stat(destPath); err == nil {
+			continue
+		}
 
-		if err := c.download(sub.FileID, destPath); err != nil {
+		if err := c.Download(sub.FileID, destPath); err != nil {
 			fmt.Printf("  [!] Failed to download %s subtitle: %v\n", lang, err)
 			continue
 		}
@@ -106,7 +147,6 @@ func (c *Client) ProcessFile(videoPath string) (int, int, error) {
 func (c *Client) missingLanguages(dir, videoBase string) []string {
 	var missing []string
 	for _, lang := range c.languages {
-		// Check common patterns: video.en.srt, video-en.srt, video.eng.srt
 		patterns := []string{
 			videoBase + "." + lang + ".srt",
 			videoBase + "-" + lang + ".srt",
@@ -125,12 +165,34 @@ func (c *Client) missingLanguages(dir, videoBase string) []string {
 	return missing
 }
 
-func (c *Client) search(videoPath string, languages []string) ([]subtitle, error) {
-	langStr := strings.Join(languages, ",")
+// Search returns candidate subtitles for a video. It tries the OSDb movie hash
+// first (when VideoPath is set) and falls back to a cleaned filename query.
+// If opts.Query is provided, it is used directly (no hash, no filename derivation).
+func (c *Client) Search(opts SearchOpts) ([]SearchResult, error) {
+	if c.apiKey == "" {
+		return nil, errNoAPIKeyErr
+	}
 
-	// Try hash search first
-	hash, err := computeMovieHash(videoPath)
-	if err == nil {
+	langs := opts.Languages
+	if len(langs) == 0 {
+		langs = c.languages
+	}
+	langStr := strings.Join(langs, ",")
+
+	// Manual query override: skip hash, search by query directly.
+	if strings.TrimSpace(opts.Query) != "" {
+		return c.doSearch(url.Values{
+			"query":     {opts.Query},
+			"languages": {langStr},
+		})
+	}
+
+	if opts.VideoPath == "" {
+		return nil, fmt.Errorf("Search requires VideoPath or Query")
+	}
+
+	// Hash first.
+	if hash, err := computeMovieHash(opts.VideoPath); err == nil {
 		subs, err := c.doSearch(url.Values{
 			"moviehash": {hash},
 			"languages": {langStr},
@@ -140,18 +202,15 @@ func (c *Client) search(videoPath string, languages []string) ([]subtitle, error
 		}
 	}
 
-	// Fallback: search by filename
-	name := strings.TrimSuffix(filepath.Base(videoPath), filepath.Ext(videoPath))
-	// Clean release info from filename for better search
-	query := cleanQuery(name)
-
+	// Filename fallback.
+	name := strings.TrimSuffix(filepath.Base(opts.VideoPath), filepath.Ext(opts.VideoPath))
 	return c.doSearch(url.Values{
-		"query":     {query},
+		"query":     {cleanQuery(name)},
 		"languages": {langStr},
 	})
 }
 
-func (c *Client) doSearch(params url.Values) ([]subtitle, error) {
+func (c *Client) doSearch(params url.Values) ([]SearchResult, error) {
 	c.rateLimiter.wait()
 
 	req, err := http.NewRequest("GET", baseURL+"/subtitles?"+params.Encode(), nil)
@@ -176,23 +235,40 @@ func (c *Client) doSearch(params url.Values) ([]subtitle, error) {
 		return nil, err
 	}
 
-	var results []subtitle
+	results := make([]SearchResult, 0, len(osResp.Data))
 	for _, item := range osResp.Data {
-		if len(item.Attributes.Files) == 0 {
+		a := item.Attributes
+		if len(a.Files) == 0 {
 			continue
 		}
-		results = append(results, subtitle{
-			Language: item.Attributes.Language,
-			FileID:   item.Attributes.Files[0].FileID,
-			FileName: item.Attributes.Files[0].FileName,
+		results = append(results, SearchResult{
+			Language:        a.Language,
+			FileID:          a.Files[0].FileID,
+			FileName:        a.Files[0].FileName,
+			Release:         a.Release,
+			Uploader:        a.Uploader.Name,
+			Downloads:       a.DownloadCount,
+			Rating:          a.Ratings,
+			Votes:           a.Votes,
+			FPS:             a.FPS,
+			HD:              a.HD,
+			HearingImpaired: a.HearingImpaired,
+			MovieHashMatch:  a.MovieHashMatch,
+			FromTrusted:     a.FromTrusted,
+			AITranslated:    a.AITranslated,
+			MachineTrans:    a.MachineTranslated,
+			UploadDate:      a.UploadDate,
 		})
 	}
 	return results, nil
 }
 
-func (c *Client) download(fileID int, destPath string) error {
-	if _, err := os.Stat(destPath); err == nil {
-		return nil // Already exists
+// Download fetches the subtitle with the given file_id and writes it to destPath,
+// overwriting any existing file. Callers are responsible for skipping duplicates
+// when that is the desired behavior.
+func (c *Client) Download(fileID int, destPath string) error {
+	if c.apiKey == "" {
+		return errNoAPIKeyErr
 	}
 
 	maxRetries := 3
@@ -248,19 +324,24 @@ func (c *Client) downloadAttempt(fileID int, destPath string) error {
 		return fmt.Errorf("download failed: %s", dlRespObj.Status)
 	}
 
-	outFile, err := os.Create(destPath)
+	tmpPath := destPath + ".part"
+	outFile, err := os.Create(tmpPath)
 	if err != nil {
 		return err
 	}
 
 	if _, err = io.Copy(outFile, dlRespObj.Body); err != nil {
 		outFile.Close()
-		os.Remove(destPath)
+		os.Remove(tmpPath)
 		return err
 	}
 
 	outFile.Sync()
-	return outFile.Close()
+	if err := outFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return os.Rename(tmpPath, destPath)
 }
 
 func (c *Client) setHeaders(req *http.Request) {
@@ -270,7 +351,7 @@ func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("User-Agent", userAgent)
 }
 
-func findForLanguage(subs []subtitle, lang string) *subtitle {
+func findForLanguage(subs []SearchResult, lang string) *SearchResult {
 	for i, s := range subs {
 		if s.Language == lang {
 			return &subs[i]
@@ -280,13 +361,11 @@ func findForLanguage(subs []subtitle, lang string) *subtitle {
 }
 
 func cleanQuery(name string) string {
-	// Remove common release tags for better search
 	for _, sep := range []string{"[", "(", " - "} {
 		if idx := strings.Index(name, sep); idx > 0 {
 			name = name[:idx]
 		}
 	}
-	// Replace dots with spaces (scene naming)
 	name = strings.ReplaceAll(name, ".", " ")
 	return strings.TrimSpace(name)
 }
