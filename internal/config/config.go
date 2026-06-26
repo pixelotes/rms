@@ -28,12 +28,13 @@ type CrawlerConfig struct {
 }
 
 type AutoScanConfig struct {
-	Enabled       bool   `yaml:"enabled"`
-	Schedule      string `yaml:"schedule"`       // "HH:MM" daily schedule (e.g. "03:00")
-	IntervalHours int    `yaml:"interval_hours"` // fallback if schedule not set
-	Metadata      bool   `yaml:"metadata"`
-	Subtitles     bool   `yaml:"subtitles"`
-	Thumbnails    bool   `yaml:"thumbnails"`
+	Enabled               bool   `yaml:"enabled"`
+	Schedule              string `yaml:"schedule"`                // "HH:MM" daily schedule (e.g. "03:00")
+	IntervalHours         int    `yaml:"interval_hours"`          // fallback if schedule not set
+	RescanIntervalMinutes int    `yaml:"rescan_interval_minutes"` // index-only refresh interval (0 = off)
+	Metadata              bool   `yaml:"metadata"`
+	Subtitles             bool   `yaml:"subtitles"`
+	Thumbnails            bool   `yaml:"thumbnails"`
 }
 
 type SubCrawlerConfig struct {
@@ -66,6 +67,7 @@ type AppConfig struct {
 	CachePath       string `yaml:"cache_path"`
 	CacheMaxGB      int    `yaml:"cache_max_gb"`
 	Debug           bool   `yaml:"debug"`
+	WebhookToken    string `yaml:"webhook_token"` // if set, enables POST /api/v1/library/rescan-hook
 }
 
 type PlayerConfig struct {
