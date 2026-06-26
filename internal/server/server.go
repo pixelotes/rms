@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -21,6 +22,10 @@ type Server struct {
 	userData    *UserDataStore
 	syncQueue   *SyncQueueStore
 	streamCache *streamCache
+
+	// webhook debounce (Paso 2)
+	rescanMu    sync.Mutex
+	rescanTimer *time.Timer
 }
 
 func New(cfg *config.Config) *Server {
@@ -84,6 +89,11 @@ func (s *Server) registerRoutes() {
 	protected.HandleFunc("/crawl/subtitles", s.handleCrawlSubtitles).Methods("POST")
 	protected.HandleFunc("/crawl/thumbnails", s.handleCrawlThumbnails).Methods("POST")
 	protected.HandleFunc("/library/rescan", s.handleRescan).Methods("POST")
+
+	// Webhook rescan — token-authenticated, no JWT required (for Sonarr/Radarr/scripts)
+	if s.config.App.WebhookToken != "" {
+		api.HandleFunc("/library/rescan-hook", s.handleRescanHook).Methods("POST")
+	}
 
 	// === Jellyfin-Compatible API ===
 	jf := s.router.PathPrefix("").Subrouter()
@@ -414,13 +424,13 @@ func (s *Server) jfVersionAtLeast(major, minor int) bool {
 }
 
 func (s *Server) Start() error {
-	added := media.PopulateIDStore(s.config.Libraries)
+	// Boot population is NOT pushed to the Kodi sync queue.
+	// Kodi sees an empty queue on first connect and performs a full scan (default).
+	// Only subsequent rescans record deltas for incremental sync.
+	added, _ := media.PopulateIDStore(s.config.Libraries)
 	log.Printf("Item ID store populated for %d libraries (%d items registered)", len(s.config.Libraries), len(added))
-	// Note: initial boot population is NOT pushed to the Kodi sync queue.
-	// Kodi will see an empty queue on first connect and perform a full library
-	// scan (its default behavior). Only subsequent changes (rescans, auto-scans)
-	// are recorded as deltas for incremental sync.
 	s.startAutoScan()
+	s.startIndexRefresh()
 	s.runBootScan()
 	log.Printf("Starting server on port %d (UI enabled: %v)", s.config.App.Port, s.config.App.UIEnabled)
 	return s.httpServer.ListenAndServe()
