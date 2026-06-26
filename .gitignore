@@ -1,8 +1,8 @@
-# Binaries
-rms
-rms-*
-subcrawler
-metacrawler
+# Binaries (anchored to repo root — does NOT exclude cmd/rms/, cmd/subcrawler/, …)
+/rms
+/rms-*
+/subcrawler
+/metacrawler
 *.exe
 
 # Media test files (anchored to repo root — does NOT exclude internal/media/)

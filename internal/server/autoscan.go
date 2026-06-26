@@ -9,6 +9,7 @@ import (
 
 	"raspberry-media-server/internal/config"
 	"raspberry-media-server/internal/media"
+	"raspberry-media-server/internal/tv"
 )
 
 func (s *Server) startAutoScan() {
@@ -129,6 +130,19 @@ func (s *Server) rescanLibraries() {
 		s.syncQueue.RecordAdded(added)
 		s.syncQueue.RecordRemoved(removed)
 	}
+	s.refreshTVChannels()
+}
+
+// refreshTVChannels re-parses every content_type: "tv" library into the
+// in-memory channel store. Cheap and side-effect free (no disk writes).
+func (s *Server) refreshTVChannels() {
+	total, errs := tv.Populate(s.config.Libraries)
+	for _, err := range errs {
+		log.Printf("TV: %v", err)
+	}
+	if total > 0 || len(errs) > 0 {
+		log.Printf("TV: %d channel(s) loaded", total)
+	}
 }
 
 // handleRescan is the authenticated endpoint for manually triggering a rescan
@@ -199,4 +213,3 @@ func fileExists(path string) bool {
 	_, err := config.Load(path)
 	return err == nil
 }
-

@@ -16,6 +16,12 @@ import (
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	filePath := mux.Vars(r)["filePath"]
 
+	// TV channel: resolve via the channel store and redirect to its stream.
+	if strings.HasPrefix(filePath, tvChanPathPrefix) {
+		s.handleTVStream(w, r, strings.TrimPrefix(filePath, tvChanPathPrefix))
+		return
+	}
+
 	// Decode if it's a base64 item ID, otherwise treat as path
 	if decoded, err := media.ItemPath(filePath); err == nil && strings.Contains(decoded, "/") {
 		filePath = decoded

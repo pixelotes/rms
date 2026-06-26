@@ -35,8 +35,9 @@ type BrowseItem struct {
 	FriendlyName string      `json:"friendly_name,omitempty"`
 	Path         string      `json:"path"`
 	IsDir        bool        `json:"is_dir"`
-	Icon         string      `json:"icon,omitempty"`      // directory poster URL
-	Thumbnail    string      `json:"thumbnail,omitempty"` // video thumb URL
+	Icon         string      `json:"icon,omitempty"`        // directory poster URL
+	Thumbnail    string      `json:"thumbnail,omitempty"`   // video thumb URL
+	StreamType   string      `json:"stream_type,omitempty"` // "hls" for live TV channels; empty = file/VOD
 	Metadata     *BrowseMeta `json:"metadata,omitempty"`
 }
 

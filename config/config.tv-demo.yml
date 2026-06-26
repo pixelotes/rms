@@ -1,0 +1,18 @@
+# Minimal config to demo TV/IPTV support with the bundled example playlist.
+# Run with:  ./rms -config config/config.tv-demo.yml
+# Then open http://localhost:8082  (user: rms  password: demo)
+app:
+  port: 8082
+  ui_enabled: true
+  ui_password: "demo"
+  jwt_secret: "demo-not-for-production"
+  debug: true
+
+player:
+  stream_strategy: ["direct"]
+
+libraries:
+  - friendly_name: "TV"
+    content_type: tv
+    path: "./lists/tv.m3u"
+    tv_proxy: false

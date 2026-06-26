@@ -37,6 +37,15 @@ libraries:
   #   metadata_lang: en
   #   content_type: tvseries
 
+  # TV / IPTV (see ADR-015). `path` is an M3U/JSON playlist, a directory of
+  # playlists, or an http(s) URL. Channels are grouped by `group-title` into
+  # categories. The library only appears when the playlist parses ≥1 channel.
+  # - friendly_name: "TV"
+  #   content_type: tv
+  #   path: "./lists/tv.m3u"
+  #   tv_proxy: false        # false = 302 redirect (default); true = proxy the stream
+  #   tv_refresh_hours: 0    # re-fetch a remote playlist every N hours (0 = boot/rescan only)
+
 # Optional: define additional users with per-library access.
 # The built-in "rms" user (with app.ui_password) is ALWAYS available and has
 # access to every library — you don't need to list it here. Users defined

@@ -105,7 +105,7 @@ document.addEventListener('DOMContentLoaded', () => {
             renderMetadata(folder);
             renderFiles(items);
             $('crawl-actions').style.display = path && path !== '.' ? 'flex' : 'none';
-            items.filter(i => !i.is_dir).forEach(i => {
+            items.filter(i => !i.is_dir && i.stream_type !== 'hls').forEach(i => {
                 loadSubs(i.path);
                 if (!i.metadata?.runtime) loadDuration(i.path);
             });
@@ -204,6 +204,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Video Player
     function playVideo(path) {
+        const isLive = path.startsWith('tv:chan:');
         state.currentStrategyIndex = 0;
         videoPlayerModal.style.display = 'flex';
         player.off('error', handleVideoError);
@@ -213,11 +214,51 @@ document.addEventListener('DOMContentLoaded', () => {
         state.lastGoodTime = 0;
         state.lastRecoveryAt = 0;
         if (state.recoveryTimer) { clearTimeout(state.recoveryTimer); state.recoveryTimer = null; }
+        setLiveMode(isLive);
+        if (isLive) {
+            // Live TV: no seek/pause/record, no duration probing, no subtitles.
+            // A basic error toast replaces the VOD strategy-rotation recovery.
+            player.on('error', liveError);
+            loadChannel(path);
+            return;
+        }
+        player.off('error', liveError);
         player.on('timeupdate', trackPlaybackProgress);
         player.on('error', handleVideoError);
         player.on('loadedmetadata', applyKnownDuration);
         installDurationOverride();
         loadVideo(path);
+    }
+
+    function liveError() { toast('Channel unavailable'); }
+
+    // Live channels reuse the same player but hide time-based controls: the seek
+    // bar and remaining-time display are meaningless for an infinite stream, and
+    // pause/record are intentionally out of scope.
+    function setLiveMode(on) {
+        const cb = player.controlBar;
+        if (!cb) return;
+        const hideShow = c => { if (c) on ? c.hide() : c.show(); };
+        hideShow(cb.progressControl);
+        hideShow(cb.remainingTimeDisplay);
+        hideShow(cb.currentTimeDisplay);
+        hideShow(cb.durationDisplay);
+    }
+
+    async function loadChannel(path) {
+        state.currentVideoPath = path;
+        state.knownDuration = 0;
+        state.playbackOffset = 0;
+        hideNextEpisodePrompt();
+        clearSubtitleTracks();
+        $('sub-offset-bar').classList.remove('visible');
+        showLoading('Loading channel...');
+        try {
+            const url = `/api/v1/stream/${encodeURIComponent(path)}?token=${encodeURIComponent(state.sessionToken)}`;
+            player.src({ src: url, type: 'application/x-mpegURL' });
+            hideLoading();
+            player.play();
+        } catch { hideLoading(); toast('Channel unavailable'); }
     }
 
     // Override player.duration() for streamed sources (remux/transcode) where the
@@ -454,7 +495,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function closeModal() {
-        videoPlayerModal.style.display = 'none'; player.pause(); player.off('error', handleVideoError); player.off('timeupdate', trackPlaybackProgress); player.off('loadedmetadata', applyKnownDuration); clearLoadWatchdog();
+        videoPlayerModal.style.display = 'none'; player.pause(); player.off('error', handleVideoError); player.off('error', liveError); player.off('timeupdate', trackPlaybackProgress); player.off('loadedmetadata', applyKnownDuration); clearLoadWatchdog();
+        setLiveMode(false);
         if (state.recoveryTimer) { clearTimeout(state.recoveryTimer); state.recoveryTimer = null; }
         state.knownDuration = 0;
         const src = player.currentSrc();

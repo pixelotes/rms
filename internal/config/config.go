@@ -43,11 +43,11 @@ type SubCrawlerConfig struct {
 }
 
 type MetaCrawlerConfig struct {
-	TMDBKey             string   `yaml:"tmdb_api_key"`
-	TraktID             string   `yaml:"trakt_client_id"`
-	AnimeProviders      []string `yaml:"anime_providers"`
-	MovieProviders      []string `yaml:"movie_providers"`
-	TVSeriesProviders   []string `yaml:"tvseries_providers"`
+	TMDBKey           string   `yaml:"tmdb_api_key"`
+	TraktID           string   `yaml:"trakt_client_id"`
+	AnimeProviders    []string `yaml:"anime_providers"`
+	MovieProviders    []string `yaml:"movie_providers"`
+	TVSeriesProviders []string `yaml:"tvseries_providers"`
 }
 
 type User struct {
@@ -80,8 +80,13 @@ type Library struct {
 	MetadataLang      string   `yaml:"metadata_lang"`
 	DownloadMetadata  YAMLBool `yaml:"download_metadata"`
 	DownloadSubtitles YAMLBool `yaml:"download_subtitles"`
-	ContentType       string   `yaml:"content_type"` // "movies" | "tvseries" | "anime"
+	ContentType       string   `yaml:"content_type"` // "movies" | "tvseries" | "anime" | "tv"
 	Providers         []string `yaml:"providers,omitempty"`
+
+	// TV / IPTV libraries (content_type: "tv"). Path points to an M3U/JSON
+	// playlist, a directory of them, or an http(s) URL (see ADR-015).
+	TVProxy        YAMLBool `yaml:"tv_proxy"`         // proxy the stream instead of 302 redirect
+	TVRefreshHours int      `yaml:"tv_refresh_hours"` // re-fetch a remote playlist every N hours (0 = boot/rescan only)
 }
 
 // YAMLBool handles YAML booleans that may be strings ("true"/"false") or native bools.
@@ -138,10 +143,18 @@ func Load(path string) (*Config, error) {
 
 func (c *Config) resolvePaths() {
 	for i, lib := range c.Libraries {
+		// TV libraries may point at an http(s) URL — leave those untouched.
+		if lib.ContentType == "tv" && isURLPath(lib.Path) {
+			continue
+		}
 		if abs, err := filepath.Abs(lib.Path); err == nil {
 			c.Libraries[i].Path = abs
 		}
 	}
+}
+
+func isURLPath(p string) bool {
+	return strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://")
 }
 
 func (c *Config) setDefaults() {

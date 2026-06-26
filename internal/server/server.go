@@ -84,6 +84,7 @@ func (s *Server) registerRoutes() {
 	protected.HandleFunc("/subtitles-search/{filePath:.+}", s.handleSearchSubtitles).Methods("POST")
 	protected.HandleFunc("/subtitles-download/{filePath:.+}", s.handleDownloadSubtitle).Methods("POST")
 	protected.HandleFunc("/images/{imageId}", s.handleImage).Methods("GET")
+	protected.HandleFunc("/tv/logo/{channelId}", s.handleTVLogo).Methods("GET")
 	protected.HandleFunc("/duration/{filePath:.+}", s.handleDuration).Methods("GET")
 	protected.HandleFunc("/crawl/metadata", s.handleCrawlMetadata).Methods("POST")
 	protected.HandleFunc("/crawl/subtitles", s.handleCrawlSubtitles).Methods("POST")
@@ -429,6 +430,7 @@ func (s *Server) Start() error {
 	// Only subsequent rescans record deltas for incremental sync.
 	added, _ := media.PopulateIDStore(s.config.Libraries)
 	log.Printf("Item ID store populated for %d libraries (%d items registered)", len(s.config.Libraries), len(added))
+	s.refreshTVChannels()
 	s.startAutoScan()
 	s.startIndexRefresh()
 	s.runBootScan()
