@@ -129,7 +129,7 @@ crawlers:
     thumbnails: true        # Run metacrawler --thumbnails
 ```
 
-After each auto-scan completes, the library ID store is refreshed so new content appears immediately in all clients.
+After each auto-scan completes, the library ID store is refreshed so new content appears in all clients.
 
 Alternative to `schedule`, use `interval_hours` for periodic runs:
 
@@ -140,13 +140,45 @@ crawlers:
     interval_hours: 12      # Every 12 hours
 ```
 
-## Library Rescan
+## New Content Detection
 
-If you add new media outside of auto-scan (e.g., via Reel or manual copy), trigger a rescan to make it visible:
+Three strategies, in order of preference for a low-power device:
+
+### 1. Webhook (recommended — zero idle overhead)
+
+Configure a static token and call the hook from Sonarr/Radarr/qBittorrent or any post-download script:
+
+```yaml
+app:
+  webhook_token: ${RMS_WEBHOOK_TOKEN}
+```
 
 ```bash
-curl -X POST http://localhost:8082/api/v1/library/rescan \
+curl -fsS -X POST http://rms:8096/api/v1/library/rescan-hook \
+  -H "X-Webhook-Token: ${RMS_WEBHOOK_TOKEN}"
+```
+
+Rapid calls within 5 seconds are debounced into one walk. No crawlers run — just a fast filesystem index refresh.
+
+### 2. Periodic index refresh (fallback for manual copies)
+
+Adds a lightweight ticker that refreshes the item index without running any crawlers. Independent of `auto_scan.enabled`.
+
+```yaml
+crawlers:
+  auto_scan:
+    rescan_interval_minutes: 10   # 0 = disabled
+```
+
+A filesystem walk of a typical library on a Raspberry Pi 3B takes under a second with warm page cache.
+
+### 3. Manual rescan
+
+Trigger on demand from the web UI or via API (requires a valid session token):
+
+```bash
+curl -X POST http://rms:8096/api/v1/library/rescan \
   -H "Authorization: Bearer <token>"
 ```
 
-This re-indexes all library directories and registers new items. It's fast (filesystem walk only, no network calls).
+All three strategies only refresh the in-memory index. They do not download metadata or subtitles.

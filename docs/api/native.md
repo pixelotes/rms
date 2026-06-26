@@ -70,13 +70,33 @@ Returns directory contents with metadata, artwork URLs, and folder info.
 POST /api/v1/library/rescan
 ```
 
-Re-indexes all library directories. Call this after adding new media to make items visible in all clients.
+Requires JWT Bearer token. Re-indexes all library directories. Fast filesystem walk — no crawlers run.
 
 **Response:**
 
 ```json
 {
   "status": "ok"
+}
+```
+
+### Webhook Rescan
+
+```
+POST /api/v1/library/rescan-hook
+```
+
+Token-authenticated (no JWT required). Designed for external triggers: Sonarr, Radarr, qBittorrent post-download scripts, `inotifywait`, etc. Only available when `app.webhook_token` is set in config.
+
+**Authentication:** pass the token in the `X-Webhook-Token` header or as `?token=<value>`.
+
+Calls within 5 seconds of each other are debounced into a single rescan.
+
+**Response:**
+
+```json
+{
+  "status": "queued"
 }
 ```
 

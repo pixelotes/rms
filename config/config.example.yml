@@ -12,6 +12,10 @@ app:
   # cache_path: "./cache"
   # cache_max_gb: 10
   debug: false
+  # Webhook token for external library rescans (Sonarr, Radarr, scripts).
+  # When set, enables POST /api/v1/library/rescan-hook (no JWT required).
+  # Calls within 5s are debounced into one walk. Leave empty to disable.
+  # webhook_token: "${RMS_WEBHOOK_TOKEN}"
 
 player:
   # Strategies tried in order when playing video. Remove "transcode" on low-power devices.
@@ -52,10 +56,15 @@ crawlers:
     languages: ["en", "es"]
   metadata:
     tmdb_api_key: "${TMDB_API_KEY}"
-  # Periodic auto-scan: fills in missing metadata, subtitles, and thumbnails
+  # Periodic auto-scan: fills in missing metadata, subtitles, and thumbnails.
+  # auto_scan.enabled runs the full crawlers (metacrawler + subcrawler).
+  # rescan_interval_minutes is independent: only refreshes the item index
+  # (fast filesystem walk, no crawlers). Use it instead of webhook_token
+  # when you can't wire an external trigger. 0 = disabled.
   auto_scan:
     enabled: false
     interval_hours: 24
+    rescan_interval_minutes: 0  # e.g. 10 for polling-based detection
     metadata: true
     subtitles: true
     thumbnails: false  # CPU intensive on low-power devices
