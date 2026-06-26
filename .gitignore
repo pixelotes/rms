@@ -5,8 +5,8 @@ subcrawler
 metacrawler
 *.exe
 
-# Media test files
-media/
+# Media test files (anchored to repo root — does NOT exclude internal/media/)
+/media/
 
 # IDE
 .idea/
