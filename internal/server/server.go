@@ -330,11 +330,16 @@ func (s *Server) registerRoutes() {
 	jfAuth.HandleFunc("/DisplayPreferences/{displayPrefsId}", s.jfDisplayPrefsStub).Methods("GET")
 	jfAuth.HandleFunc("/DisplayPreferences/{displayPrefsId}", s.jfSessionStub).Methods("POST")
 
-	// LiveTv stub (Moonfin checks for live TV)
-	jfAuth.HandleFunc("/LiveTv/Programs/Recommended", s.jfEmptyItems).Methods("GET")
+	// LiveTv: channels are served from the M3U/IPTV channel store (ADR-015).
+	// EPG (Programs/Guide) and DVR remain unimplemented — empty stubs.
 	jfAuth.HandleFunc("/LiveTv/Info", s.jfLiveTVInfo).Methods("GET")
-	jfAuth.HandleFunc("/LiveTv/Channels", s.jfEmptyItems).Methods("GET")
+	jfAuth.HandleFunc("/LiveTv/Channels", s.jfLiveTvChannels).Methods("GET")
+	jfAuth.HandleFunc("/LiveTv/Channels/{channelId}", s.jfLiveTvChannel).Methods("GET")
+	jfAuth.HandleFunc("/LiveTv/Programs/Recommended", s.jfEmptyItems).Methods("GET")
 	jfAuth.HandleFunc("/LiveTv/Programs", s.jfEmptyItems).Methods("GET", "POST")
+	jfAuth.HandleFunc("/LiveTv/GuideInfo", s.jfEmptyObject).Methods("GET")
+	jfAuth.HandleFunc("/LiveStreams/Open", s.jfOpenLiveStream).Methods("POST")
+	jfAuth.HandleFunc("/LiveStreams/Close", s.jfCloseLiveStream).Methods("POST")
 
 	// Lightweight compatibility stubs used by several official and third-party clients at startup.
 	jfAuth.HandleFunc("/Plugins", s.jfEmptyArray).Methods("GET")

@@ -12,10 +12,25 @@ import (
 	"github.com/gorilla/mux"
 
 	"raspberry-media-server/internal/media"
+	"raspberry-media-server/internal/tv"
 )
 
 func (s *Server) jfPlaybackInfo(w http.ResponseWriter, r *http.Request) {
 	itemID := mux.Vars(r)["itemId"]
+
+	// TV channel: return its HLS MediaSource (infinite, non-seekable).
+	if ch, ok := tv.LookupChannel(itemID); ok {
+		if !s.tvLibraryVisible(ch.LibKey, r) {
+			respondError(w, http.StatusNotFound, "Item not found")
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]interface{}{
+			"MediaSources":  []map[string]interface{}{channelMediaSource(ch)},
+			"PlaySessionId": "ps-" + ch.ID[:8],
+			"ErrorCode":     "NoError",
+		})
+		return
+	}
 
 	path, err := media.ItemPath(itemID)
 	if err != nil {
@@ -49,6 +64,12 @@ func (s *Server) jfPlaybackInfo(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) jfVideoStream(w http.ResponseWriter, r *http.Request) {
 	itemID := mux.Vars(r)["itemId"]
+
+	// TV channel: redirect to the upstream HLS stream.
+	if ch, ok := tv.LookupChannel(itemID); ok {
+		s.handleTVStream(w, r, ch.ID)
+		return
+	}
 
 	path, err := media.ItemPath(itemID)
 	if err != nil {

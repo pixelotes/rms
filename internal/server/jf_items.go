@@ -11,6 +11,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"raspberry-media-server/internal/media"
+	"raspberry-media-server/internal/tv"
 )
 
 // --- Views (Libraries) ---
@@ -191,6 +192,19 @@ func (s *Server) jfGetItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// TV channel.
+	if ch, ok := tv.LookupChannel(itemID); ok {
+		if !s.tvLibraryVisible(ch.LibKey, r) {
+			respondError(w, http.StatusNotFound, "Item not found")
+			return
+		}
+		item := channelItem(ch)
+		item["MediaSources"] = []map[string]interface{}{channelMediaSource(ch)}
+		item["UserData"] = s.userData.Get(stableUserID(usernameFromContext(r)), ch.ID)
+		respondJSON(w, http.StatusOK, item)
+		return
+	}
+
 	path, err := media.ItemPath(itemID)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "Item not found")
@@ -273,6 +287,17 @@ func (s *Server) jfGetItemImage(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	itemID := vars["itemId"]
 	imageType := vars["imageType"]
+
+	// TV channel logo: redirect to the upstream image (clients load images via
+	// <img>, so cross-origin is fine — no proxy needed here).
+	if ch, ok := tv.LookupChannel(itemID); ok {
+		if ch.Logo == "" {
+			http.NotFound(w, r)
+			return
+		}
+		http.Redirect(w, r, ch.Logo, http.StatusFound)
+		return
+	}
 
 	var imgPath string
 

@@ -159,7 +159,7 @@ El WebUI usa `/api/v1/browse?path=` y `/api/v1/stream/` ([app.js](web/js/app.js)
 |---|---|---|---|
 | **0 ✅** | Parser M3U + `ChannelStore` (con **fusión de fuentes** por identidad tvg-id/nombre) + config `content_type: tv`, integrado en `Populate`. Tests con `lists/tv.m3u`. **HECHO** (`internal/tv/`). | (interno) | Bajo |
 | **1 ✅** | WebUI: browse de categorías/canales + reproducción HLS por **redirect**, logos vía proxy, player live sin barra de seek. **HECHO** (`internal/server/tv.go`, `web/js/app.js`). | **ver y reproducir canales en el navegador**. | Bajo |
-| **2** | API LiveTv para clientes Jellyfin: `Info`, `Channels`, `PlaybackInfo`, `LiveStreams/Open`, logos. | Pestaña Live TV en Streamyfin/Kodi. | Medio |
+| **2 ✅** | API LiveTv para clientes Jellyfin: `Info`, `Channels`, `Channels/{id}`, rama de canal en `PlaybackInfo`/`Videos/stream`/`Items/{id}`/imagen, `LiveStreams/Open`+`Close`. **HECHO** (`internal/server/jf_livetv.go`). | Pestaña Live TV en Streamyfin/Kodi. | Medio |
 | **3** | Modo **proxy** para streams con cabeceras `#EXTVLCOPT`/CORS, caché opcional de logos. **Quitar el soporte JSON** (`parse_json.go` + rama en `parseByName`): el 99% de las listas son `.m3u`/`.m3u8`; el JSON añade superficie sin uso real. | Robustez (canales que hoy fallan por cabeceras). | Medio-alto |
 | **5** | Config de **fuentes múltiples por biblioteca** + `refresh`/`refresh_interval` por fuente (re-descarga de listas remotas). | Listas que se actualizan solas. | Medio |
 

@@ -388,10 +388,27 @@ func (s *Server) jfNextUp(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// jfLiveTVInfo gates the Live TV section in clients. It is enabled only when
+// the user can see at least one TV library with parsed channels; the non-empty
+// Services list is what makes clients reveal their Live TV UI.
 func (s *Server) jfLiveTVInfo(w http.ResponseWriter, r *http.Request) {
+	enabled := len(s.visibleTVLibraries(r)) > 0
+	services := []interface{}{}
+	if enabled {
+		services = append(services, map[string]interface{}{
+			"Name":               serverName,
+			"HomePageUrl":        "",
+			"Status":             "Ok",
+			"StatusMessage":      "",
+			"Version":            "1.0",
+			"HasUpdateAvailable": false,
+			"IsVisible":          true,
+			"Tuners":             []interface{}{},
+		})
+	}
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"Services":     []interface{}{},
-		"IsEnabled":    false,
+		"Services":     services,
+		"IsEnabled":    enabled,
 		"EnabledUsers": []interface{}{},
 	})
 }

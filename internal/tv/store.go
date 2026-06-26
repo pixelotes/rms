@@ -229,6 +229,22 @@ func GroupsForLibrary(libKey string) []*Group {
 	return current().byLib[libKey]
 }
 
+// ChannelsForLibrary returns every channel of a TV library (keyed by its config
+// Path), ordered by channel Number (playlist order).
+func ChannelsForLibrary(libKey string) []*Channel {
+	snap := current()
+	var out []*Channel
+	for _, g := range snap.byLib[libKey] {
+		for _, id := range g.ChannelIDs {
+			if c, ok := snap.channels[id]; ok {
+				out = append(out, c)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Number < out[j].Number })
+	return out
+}
+
 // ChannelsForGroup returns the channels of a group in playlist order.
 func ChannelsForGroup(groupID string) []*Channel {
 	snap := current()
