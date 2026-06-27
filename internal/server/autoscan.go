@@ -96,6 +96,37 @@ func (s *Server) startIndexRefresh() {
 	}()
 }
 
+// startTVRefresh periodically re-fetches TV/IPTV playlists so a remote channel
+// list stays current without a full library rescan. Controlled per library by
+// tv_refresh_hours; the ticker runs at the shortest configured interval and
+// re-parses every TV library on each tick (cheap, in-memory). A fetch failure
+// falls back to the last-good copy, so a transient outage never empties the
+// guide. 0 (the default) = refresh on boot/rescan only.
+func (s *Server) startTVRefresh() {
+	minHours := 0
+	for _, lib := range s.config.Libraries {
+		if lib.ContentType != "tv" || lib.TVRefreshHours <= 0 {
+			continue
+		}
+		if minHours == 0 || lib.TVRefreshHours < minHours {
+			minHours = lib.TVRefreshHours
+		}
+	}
+	if minHours == 0 {
+		return
+	}
+	interval := time.Duration(minHours) * time.Hour
+	log.Printf("TV playlist refresh enabled: every %dh", minHours)
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			s.refreshTVChannels()
+		}
+	}()
+}
+
 func (s *Server) runAutoScan() {
 	cfg := s.config.Crawlers.AutoScan
 	log.Println("Auto-scan: starting...")

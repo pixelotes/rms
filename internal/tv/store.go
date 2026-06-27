@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -46,6 +47,28 @@ func current() *snapshot {
 // or dead URL from stalling boot.
 var httpClient = &http.Client{Timeout: 20 * time.Second}
 
+// lastGood caches the most recently parsed entries for each remote source. When
+// a later fetch fails (transient 5xx, DNS, timeout) we serve this copy instead
+// of dropping every channel of that library. Only URL sources are cached; local
+// files re-read cheaply and reflect deletions immediately.
+var (
+	lastGoodMu sync.Mutex
+	lastGood   = map[string][]Entry{}
+)
+
+func rememberEntries(src string, entries []Entry) {
+	lastGoodMu.Lock()
+	lastGood[src] = entries
+	lastGoodMu.Unlock()
+}
+
+func cachedEntries(src string) ([]Entry, bool) {
+	lastGoodMu.Lock()
+	defer lastGoodMu.Unlock()
+	e, ok := lastGood[src]
+	return e, ok
+}
+
 // Populate (re)parses every content_type: "tv" library and atomically replaces
 // the channel store. It returns the total number of (merged) channels loaded.
 // Libraries that fail to load are reported via the returned error slice.
@@ -58,8 +81,18 @@ func Populate(libs []config.Library) (total int, errs []error) {
 		}
 		entries, err := loadSource(lib.Path)
 		if err != nil {
+			// A remote playlist that fails to fetch must not wipe its channels:
+			// fall back to the last successfully parsed copy if we have one.
+			if cached, ok := cachedEntries(lib.Path); ok {
+				errs = append(errs, fmt.Errorf("tv library %q: %w (serving last-good copy)", lib.FriendlyName, err))
+				ingest(snap, lib.Path, cached)
+				continue
+			}
 			errs = append(errs, fmt.Errorf("tv library %q: %w", lib.FriendlyName, err))
 			continue
+		}
+		if isURL(lib.Path) {
+			rememberEntries(lib.Path, entries)
 		}
 		ingest(snap, lib.Path, entries)
 	}

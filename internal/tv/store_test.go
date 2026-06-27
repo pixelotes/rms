@@ -1,6 +1,8 @@
 package tv
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,6 +139,46 @@ func TestPopulate_RealPlaylist(t *testing.T) {
 	}
 	if seen != total {
 		t.Errorf("walked %d channels via groups, total is %d", seen, total)
+	}
+}
+
+func TestPopulate_RemoteFetchFailsFallsBackToLastGood(t *testing.T) {
+	const m3u = `#EXTM3U
+#EXTINF:-1 tvg-id="La1.TV" group-title="Generalistas",La 1
+https://cdn-a/la1.m3u8
+`
+	// Server serves the playlist once, then fails every subsequent request.
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls > 1 {
+			http.Error(w, "upstream down", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-mpegurl")
+		_, _ = w.Write([]byte(m3u))
+	}))
+	defer srv.Close()
+
+	url := srv.URL + "/list.m3u"
+	libs := []config.Library{{FriendlyName: "TV", ContentType: "tv", Path: url}}
+
+	// First Populate succeeds and primes the last-good cache.
+	if total, errs := Populate(libs); total != 1 || len(errs) != 0 {
+		t.Fatalf("first populate: total=%d errs=%v", total, errs)
+	}
+
+	// Second Populate hits the 500. Channels must survive via the cache, and the
+	// error must be surfaced (so the operator sees the stale data).
+	total, errs := Populate(libs)
+	if total != 1 {
+		t.Fatalf("expected 1 channel served from last-good cache, got %d", total)
+	}
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "last-good") {
+		t.Fatalf("expected a surfaced last-good error, got %v", errs)
+	}
+	if ChannelCount(url) != 1 {
+		t.Errorf("ChannelCount after fallback = %d, want 1", ChannelCount(url))
 	}
 }
 

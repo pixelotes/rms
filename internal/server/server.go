@@ -440,6 +440,7 @@ func (s *Server) Start() error {
 	s.refreshTVChannels()
 	s.startAutoScan()
 	s.startIndexRefresh()
+	s.startTVRefresh()
 	s.runBootScan()
 	log.Printf("Starting server on port %d (UI enabled: %v)", s.config.App.Port, s.config.App.UIEnabled)
 	return s.httpServer.ListenAndServe()
