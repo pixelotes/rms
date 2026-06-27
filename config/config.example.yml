@@ -12,6 +12,16 @@ app:
   # cache_path: "./cache"
   # cache_max_gb: 10
   debug: false
+  # GC tuning for low-memory devices (e.g. Raspberry Pi). Both are optional and
+  # default to off (Go's normal behavior). The standard env vars take precedence:
+  # if GOGC / GOMEMLIMIT are exported, the runtime honors those and these are
+  # ignored — so you can override per-process without editing config.
+  #   gogc: lower than 100 = collect more often, less peak RAM, slightly more CPU.
+  #         A media server is idle most of the time, so 50 is a safe starting point.
+  #   memory_limit_mb: soft heap ceiling (GOMEMLIMIT). Keep headroom below the
+  #         container/device limit; too low causes GC thrashing. 0 = no limit.
+  # gogc: 50
+  # memory_limit_mb: 256
   # Webhook token for external library rescans (Sonarr, Radarr, scripts).
   # When set, enables POST /api/v1/library/rescan-hook (no JWT required).
   # Calls within 5s are debounced into one walk. Leave empty to disable.

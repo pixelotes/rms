@@ -68,6 +68,12 @@ type AppConfig struct {
 	CacheMaxGB      int    `yaml:"cache_max_gb"`
 	Debug           bool   `yaml:"debug"`
 	WebhookToken    string `yaml:"webhook_token"` // if set, enables POST /api/v1/library/rescan-hook
+
+	// GC tuning for low-memory devices. Both honor their standard env vars first
+	// (GOGC / GOMEMLIMIT); a config value is applied only when the env var is
+	// unset, so operators can still override per-process without editing config.
+	GOGC          int `yaml:"gogc"`            // GC target %; lower = less RAM, more CPU. 0 = Go default (100)
+	MemoryLimitMB int `yaml:"memory_limit_mb"` // soft heap limit (GOMEMLIMIT) in MiB. 0 = no limit
 }
 
 type PlayerConfig struct {
