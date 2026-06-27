@@ -224,6 +224,8 @@ func (s *Server) registerRoutes() {
 	jfAuth.HandleFunc("/Items/{itemId}/ThemeVideos", s.jfEmptyItems).Methods("GET")
 	jfAuth.HandleFunc("/Items/{itemId}/SpecialFeatures", s.jfEmptyArray).Methods("GET")
 	jfAuth.HandleFunc("/Items/{itemId}/LocalTrailers", s.jfEmptyArray).Methods("GET")
+	// Jellyfin 12.0+: collections containing the item. RMS has no collections (no DB) → empty result.
+	jfAuth.HandleFunc("/Items/{itemId}/Collections", s.jfEmptyItems).Methods("GET")
 	jfAuth.HandleFunc("/Items/{itemId}", s.jfGetItem).Methods("GET")
 	jfAuth.HandleFunc("/Items/{itemId}", s.jfSessionStub).Methods("POST", "DELETE")
 	jfAuth.HandleFunc("/Items", s.jfSessionStub).Methods("DELETE")
