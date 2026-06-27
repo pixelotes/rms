@@ -166,7 +166,12 @@ func (s *Server) rescanLibraries() {
 
 // refreshTVChannels re-parses every content_type: "tv" library into the
 // in-memory channel store. Cheap and side-effect free (no disk writes).
+// Skipped entirely when no TV library is configured, so the channel store is
+// never even allocated on installs that don't use IPTV.
 func (s *Server) refreshTVChannels() {
+	if !s.hasTVLibraries() {
+		return
+	}
 	total, errs := tv.Populate(s.config.Libraries)
 	for _, err := range errs {
 		log.Printf("TV: %v", err)

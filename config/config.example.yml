@@ -58,22 +58,42 @@ libraries:
 #     password: "${MARIA_PASSWORD}"
 #     libraries: ["Movies", "TV Shows"]
 
-# Crawler settings (used by subcrawler and metacrawler binaries, not by rms)
+# Crawler settings (used by the subcrawler and metacrawler binaries, not by rms
+# itself — rms only shells out to them during an auto-scan).
+#
+# Note: the crawlers are a *just-in-case* convenience. If your media already
+# arrives with its metadata, posters and subtitles (e.g. fetched by the sibling
+# "reel" downloader), you can leave auto_scan.enabled: false and they never run.
+# They only earn their keep for media you drop in by hand without sidecar files.
 crawlers:
   subtitles:
     api_key: "${OPENSUBTITLES_API_KEY}"
     languages: ["en", "es"]
   metadata:
     tmdb_api_key: "${TMDB_API_KEY}"
-  # Periodic auto-scan: fills in missing metadata, subtitles, and thumbnails.
-  # auto_scan.enabled runs the full crawlers (metacrawler + subcrawler).
-  # rescan_interval_minutes is independent: only refreshes the item index
-  # (fast filesystem walk, no crawlers). Use it instead of webhook_token
-  # when you can't wire an external trigger. 0 = disabled.
+
+  # --- Background jobs overview --------------------------------------------
+  # rms can run up to three independent background jobs. Each only starts when
+  # its setting is enabled, so an install that needs none stays idle:
+  #
+  #   1. Auto-scan      (auto_scan.enabled)   — shells out to metacrawler +
+  #      subcrawler to DOWNLOAD missing metadata/subtitles/thumbnails, then
+  #      refreshes the item index. Heaviest job; runs the external binaries as
+  #      child processes. Off by default.
+  #   2. Index refresh  (rescan_interval_minutes) — independent of auto-scan.
+  #      Just a cheap filesystem walk to pick up added/removed files; runs NO
+  #      crawlers. Use it for polling-based detection when you can't wire an
+  #      external trigger (webhook_token above). 0 = disabled.
+  #   3. TV refresh     (per-library tv_refresh_hours) — only when a
+  #      content_type: "tv" library exists; re-fetches remote IPTV playlists.
+  #
+  # The Live TV subsystem (channel store + /LiveTv routes) is not even
+  # initialized unless at least one content_type: "tv" library is configured.
   auto_scan:
-    enabled: false
-    interval_hours: 24
-    rescan_interval_minutes: 0  # e.g. 10 for polling-based detection
-    metadata: true
-    subtitles: true
-    thumbnails: false  # CPU intensive on low-power devices
+    enabled: false              # master switch for the metadata/subtitle crawlers
+    schedule: ""                # "HH:MM" daily (e.g. "03:00"); overrides interval_hours
+    interval_hours: 24          # fallback cadence when schedule is empty
+    rescan_interval_minutes: 0  # index-only refresh; e.g. 10 for polling-based detection
+    metadata: true              # download missing metadata via metacrawler
+    subtitles: true             # download missing subtitles via subcrawler
+    thumbnails: false           # generate thumbnails — CPU intensive on low-power devices

@@ -84,7 +84,9 @@ func (s *Server) registerRoutes() {
 	protected.HandleFunc("/subtitles-search/{filePath:.+}", s.handleSearchSubtitles).Methods("POST")
 	protected.HandleFunc("/subtitles-download/{filePath:.+}", s.handleDownloadSubtitle).Methods("POST")
 	protected.HandleFunc("/images/{imageId}", s.handleImage).Methods("GET")
-	protected.HandleFunc("/tv/logo/{channelId}", s.handleTVLogo).Methods("GET")
+	if s.hasTVLibraries() {
+		protected.HandleFunc("/tv/logo/{channelId}", s.handleTVLogo).Methods("GET")
+	}
 	protected.HandleFunc("/duration/{filePath:.+}", s.handleDuration).Methods("GET")
 	protected.HandleFunc("/crawl/metadata", s.handleCrawlMetadata).Methods("POST")
 	protected.HandleFunc("/crawl/subtitles", s.handleCrawlSubtitles).Methods("POST")
@@ -334,14 +336,18 @@ func (s *Server) registerRoutes() {
 
 	// LiveTv: channels are served from the M3U/IPTV channel store (ADR-015).
 	// EPG (Programs/Guide) and DVR remain unimplemented — empty stubs.
-	jfAuth.HandleFunc("/LiveTv/Info", s.jfLiveTVInfo).Methods("GET")
-	jfAuth.HandleFunc("/LiveTv/Channels", s.jfLiveTvChannels).Methods("GET")
-	jfAuth.HandleFunc("/LiveTv/Channels/{channelId}", s.jfLiveTvChannel).Methods("GET")
-	jfAuth.HandleFunc("/LiveTv/Programs/Recommended", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/LiveTv/Programs", s.jfEmptyItems).Methods("GET", "POST")
-	jfAuth.HandleFunc("/LiveTv/GuideInfo", s.jfEmptyObject).Methods("GET")
-	jfAuth.HandleFunc("/LiveStreams/Open", s.jfOpenLiveStream).Methods("POST")
-	jfAuth.HandleFunc("/LiveStreams/Close", s.jfCloseLiveStream).Methods("POST")
+	// Registered only when a content_type: "tv" library exists; otherwise the
+	// whole subsystem stays off and these paths 404 (feature absent).
+	if s.hasTVLibraries() {
+		jfAuth.HandleFunc("/LiveTv/Info", s.jfLiveTVInfo).Methods("GET")
+		jfAuth.HandleFunc("/LiveTv/Channels", s.jfLiveTvChannels).Methods("GET")
+		jfAuth.HandleFunc("/LiveTv/Channels/{channelId}", s.jfLiveTvChannel).Methods("GET")
+		jfAuth.HandleFunc("/LiveTv/Programs/Recommended", s.jfEmptyItems).Methods("GET")
+		jfAuth.HandleFunc("/LiveTv/Programs", s.jfEmptyItems).Methods("GET", "POST")
+		jfAuth.HandleFunc("/LiveTv/GuideInfo", s.jfEmptyObject).Methods("GET")
+		jfAuth.HandleFunc("/LiveStreams/Open", s.jfOpenLiveStream).Methods("POST")
+		jfAuth.HandleFunc("/LiveStreams/Close", s.jfCloseLiveStream).Methods("POST")
+	}
 
 	// Lightweight compatibility stubs used by several official and third-party clients at startup.
 	jfAuth.HandleFunc("/Plugins", s.jfEmptyArray).Methods("GET")
@@ -429,6 +435,20 @@ func (s *Server) registerRoutes() {
 func (s *Server) jfVersionAtLeast(major, minor int) bool {
 	m, n := s.config.App.JellyfinMajorMinor()
 	return m > major || (m == major && n >= minor)
+}
+
+// hasTVLibraries reports whether any content_type: "tv" library is configured.
+// When false, the entire Live TV / IPTV subsystem stays dormant: no channel
+// store is populated, no refresh job runs, and the /LiveTv and /tv/logo routes
+// are never registered. This keeps the feature truly off (matching ADR-005's
+// default) rather than carrying its handlers and an empty store for nothing.
+func (s *Server) hasTVLibraries() bool {
+	for _, lib := range s.config.Libraries {
+		if lib.ContentType == "tv" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) Start() error {
