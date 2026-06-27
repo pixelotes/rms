@@ -23,8 +23,8 @@ a:hover { color: #fff; }
 /* --- Header --- */
 header { padding: 20px 0 10px; }
 .header-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.header-logo { display: flex; align-items: center; gap: 8px; font-size: 20px; font-weight: 700; color: #fff; white-space: nowrap; }
-.header-logo svg { width: 28px; height: 28px; }
+.header-logo { display: flex; align-items: center; gap: 4px; font-size: 20px; font-weight: 700; color: #fff; white-space: nowrap; }
+.header-logo svg { width: 30px; height: 30px; }
 #search-input { flex: 1; padding: 10px 16px; border-radius: 8px; border: 1px solid #333; background: #161616; color: #fff; font-size: 14px; outline: none; }
 #search-input:focus { border-color: #c62828; }
 #breadcrumb { font-size: 13px; color: #888; padding: 4px 0 12px; border-bottom: 1px solid #1a1a1a; }
