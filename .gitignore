@@ -19,3 +19,6 @@ Thumbs.db
 
 # CONFIG
 config/config.yml
+
+# TV / IPTV playlists — user-provided; not shipped (third-party content)
+/lists/

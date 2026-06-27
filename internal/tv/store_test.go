@@ -92,6 +92,11 @@ func TestPopulate_RealPlaylist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("abs: %v", err)
 	}
+	// lists/ is gitignored (user-provided, not shipped with the repo). Skip when
+	// the local playlist is absent rather than failing on a fresh clone / CI.
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("local playlist %s not present; skipping real-playlist test", path)
+	}
 	libs := []config.Library{
 		{FriendlyName: "Movies", ContentType: "movies", Path: "/tmp/movies"},
 		{FriendlyName: "TV", ContentType: "tv", Path: path},
