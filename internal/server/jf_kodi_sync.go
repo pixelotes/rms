@@ -18,15 +18,21 @@ type syncChange struct {
 }
 
 // SyncQueueStore tracks library changes with timestamps for Kodi's
-// incremental sync.
+// incremental sync. Entries older than retentionDays are pruned lazily
+// whenever new changes are recorded, bounding memory to roughly
+// retentionDays × avg_daily_changes × 60 bytes.
 type SyncQueueStore struct {
-	mu      sync.RWMutex
-	added   []syncChange
-	removed []syncChange
+	mu            sync.RWMutex
+	added         []syncChange
+	removed       []syncChange
+	retentionDays int
 }
 
-func NewSyncQueueStore() *SyncQueueStore {
-	return &SyncQueueStore{}
+func NewSyncQueueStore(retentionDays int) *SyncQueueStore {
+	if retentionDays <= 0 {
+		retentionDays = 30
+	}
+	return &SyncQueueStore{retentionDays: retentionDays}
 }
 
 func (q *SyncQueueStore) RecordAdded(ids []string) {
@@ -36,6 +42,7 @@ func (q *SyncQueueStore) RecordAdded(ids []string) {
 	now := time.Now().UTC()
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.pruneOlderThan(now.AddDate(0, 0, -q.retentionDays))
 	for _, id := range ids {
 		q.added = append(q.added, syncChange{ItemID: id, Timestamp: now})
 	}
@@ -48,9 +55,33 @@ func (q *SyncQueueStore) RecordRemoved(ids []string) {
 	now := time.Now().UTC()
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.pruneOlderThan(now.AddDate(0, 0, -q.retentionDays))
 	for _, id := range ids {
 		q.removed = append(q.removed, syncChange{ItemID: id, Timestamp: now})
 	}
+}
+
+// pruneOlderThan drops entries whose timestamp is before cutoff.
+// Entries are always appended in time order, so the cutoff is a prefix.
+// Must be called with q.mu held for writing.
+func (q *SyncQueueStore) pruneOlderThan(cutoff time.Time) {
+	q.added = trimBefore(q.added, cutoff)
+	q.removed = trimBefore(q.removed, cutoff)
+}
+
+// trimBefore returns the sub-slice of changes at or after cutoff,
+// reallocating to release the backing array of the dropped prefix.
+func trimBefore(changes []syncChange, cutoff time.Time) []syncChange {
+	i := 0
+	for i < len(changes) && changes[i].Timestamp.Before(cutoff) {
+		i++
+	}
+	if i == 0 {
+		return changes
+	}
+	fresh := make([]syncChange, len(changes)-i)
+	copy(fresh, changes[i:])
+	return fresh
 }
 
 func (q *SyncQueueStore) Since(t time.Time) (added, removed []string) {
@@ -72,7 +103,7 @@ func (q *SyncQueueStore) Since(t time.Time) (added, removed []string) {
 func (s *Server) jfKodiSyncSettings(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"IsEnabled":              true,
-		"RetentionDays":          365,
+		"RetentionDays":          s.syncQueue.retentionDays,
 		"TrackUserDataChanges":   true,
 		"TrackFolderChanges":     true,
 		"TrackOnlyFolderChanges": false,
