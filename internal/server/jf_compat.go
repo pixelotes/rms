@@ -573,7 +573,10 @@ func (s *Server) scheduledTaskDTO(id, name string) map[string]interface{} {
 }
 
 func (s *Server) jfRunScheduledTask(w http.ResponseWriter, r *http.Request) {
-	taskID := r.PathValue("taskId")
+	s.jfRunScheduledTaskByID(w, r, r.PathValue("taskId"))
+}
+
+func (s *Server) jfRunScheduledTaskByID(w http.ResponseWriter, _ *http.Request, taskID string) {
 	if strings.EqualFold(taskID, "ScanLibrary") || strings.EqualFold(taskID, "RefreshLibrary") {
 		s.rescanLibraries()
 	}

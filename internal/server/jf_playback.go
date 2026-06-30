@@ -103,7 +103,10 @@ func (s *Server) jfVideoStream(w http.ResponseWriter, r *http.Request) {
 func (s *Server) jfSubtitleStream(w http.ResponseWriter, r *http.Request) {
 	itemID := r.PathValue("itemId")
 	subtitleIndex, _ := strconv.Atoi(r.PathValue("index"))
-	format := r.PathValue("format")
+	// format is extracted from the last path segment, e.g. "Stream.vtt" → "vtt".
+	// The pattern uses {streamFile} to avoid stdlib's partial-segment wildcard
+	// limitation (it doesn't support "Stream.{format}").
+	_, format, _ := strings.Cut(r.PathValue("streamFile"), ".")
 
 	path, err := media.ItemPath(itemID)
 	if err != nil {

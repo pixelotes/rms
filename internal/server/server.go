@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -75,7 +76,7 @@ func (s *Server) registerRoutes() {
 		}
 		mux.Handle("/css/{path...}", withCache(http.StripPrefix("/css/", http.FileServer(http.Dir("web/css")))))
 		mux.Handle("/js/{path...}", withCache(http.StripPrefix("/js/", http.FileServer(http.Dir("web/js")))))
-		mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 			http.ServeFile(w, r, "web/index.html")
 		})
@@ -137,12 +138,27 @@ func (s *Server) registerRoutes() {
 
 	// Streaming — public (media players use bare URLs without auth headers)
 	route(mux, "/Videos/{itemId}/stream", http.HandlerFunc(s.jfVideoStream), "GET", "HEAD")
-	route(mux, "/Videos/{itemId}/stream.{container}", http.HandlerFunc(s.jfVideoStream), "GET", "HEAD")
 	route(mux, "/Audio/{itemId}/stream", http.HandlerFunc(s.jfVideoStream), "GET", "HEAD")
-	route(mux, "/Audio/{itemId}/stream.{container}", http.HandlerFunc(s.jfVideoStream), "GET", "HEAD")
 	route(mux, "/Audio/{itemId}/universal", http.HandlerFunc(s.jfVideoStream), "GET", "HEAD")
-	mux.Handle("GET /Videos/{itemId}/{sourceId}/Subtitles/{index}/{tick}/Stream.{format}", http.HandlerFunc(s.jfSubtitleStream))
-	mux.Handle("GET /Videos/{itemId}/{sourceId}/Subtitles/{index}/Stream.{format}", http.HandlerFunc(s.jfSubtitleStream))
+	// stdlib ServeMux does not support partial-segment wildcards (e.g. "stream.{ext}"),
+	// so we match the whole trailing segment and guard in the handler.
+	streamVariant := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seg := r.PathValue("streamFile")
+		if !strings.HasPrefix(seg, "stream.") {
+			http.NotFound(w, r)
+			return
+		}
+		s.jfVideoStream(w, r)
+	})
+	// Register only GET — stdlib 1.22+ routes HEAD to matching GET patterns automatically.
+	// Registering explicit HEAD here would conflict with the more-specific HEAD patterns
+	// already registered above (e.g. HEAD /Videos/{itemId}/stream).
+	mux.Handle("GET /Videos/{itemId}/{streamFile}", streamVariant)
+	mux.Handle("GET /Audio/{itemId}/{streamFile}", streamVariant)
+	// Subtitle streams: last segment is e.g. "Stream.vtt". The handler extracts
+	// the format from {streamFile} via strings.Cut.
+	mux.Handle("GET /Videos/{itemId}/{sourceId}/Subtitles/{index}/{tick}/{streamFile}", http.HandlerFunc(s.jfSubtitleStream))
+	mux.Handle("GET /Videos/{itemId}/{sourceId}/Subtitles/{index}/{streamFile}", http.HandlerFunc(s.jfSubtitleStream))
 
 	// === Jellyfin protected endpoints ===
 
@@ -392,9 +408,18 @@ func (s *Server) registerRoutes() {
 	route(mux, "/Library/VirtualFolders/Paths", s.jf(s.jfSessionStub), "POST", "DELETE")
 	mux.Handle("POST /Library/VirtualFolders/Paths/Update", s.jf(s.jfSessionStub))
 	mux.Handle("GET /ScheduledTasks/{taskId}", s.jf(s.jfScheduledTask))
-	mux.Handle("POST /ScheduledTasks/{taskId}/Triggers", s.jf(s.jfSessionStub))
-	mux.Handle("POST /ScheduledTasks/Running/{taskId}", s.jf(s.jfRunScheduledTask))
-	mux.Handle("DELETE /ScheduledTasks/Running/{taskId}", s.jf(s.jfSessionStub))
+	// /ScheduledTasks/Running/{taskId} and /ScheduledTasks/{taskId}/Triggers both
+	// match /ScheduledTasks/Running/Triggers — stdlib rejects that ambiguity.
+	// Collapse all mutations into one wildcard handler and dispatch on the path.
+	mux.Handle("POST /ScheduledTasks/{rest...}", s.jf(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rest := r.PathValue("rest")
+		if after, ok := strings.CutPrefix(rest, "Running/"); ok {
+			s.jfRunScheduledTaskByID(w, r, after)
+			return
+		}
+		s.jfSessionStub(w, r)
+	})))
+	mux.Handle("DELETE /ScheduledTasks/{rest...}", s.jf(s.jfSessionStub))
 	mux.Handle("GET /Packages/{name}", s.jf(s.jfPackageInfo))
 	mux.Handle("POST /Packages/Installed/{name}", s.jf(s.jfSessionStub))
 	mux.Handle("DELETE /Packages/Installing/{packageId}", s.jf(s.jfSessionStub))
