@@ -10,16 +10,18 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // streamCache stores remuxed MP4s on disk so subsequent plays can be served
 // via http.ServeFile (which supports Range/seek). nil means caching is
 // disabled.
 type streamCache struct {
-	root     string
-	maxBytes int64
-	inflight sync.Map // map[string]chan struct{}
-	evictMu  sync.Mutex
+	root       string
+	maxBytes   int64
+	totalBytes atomic.Int64
+	inflight   sync.Map // map[string]chan struct{}
+	evictMu    sync.Mutex
 }
 
 func newStreamCache(root string, maxGB int) *streamCache {
@@ -30,11 +32,31 @@ func newStreamCache(root string, maxGB int) *streamCache {
 		log.Printf("stream cache: cannot create %s: %v", root, err)
 		return nil
 	}
-	log.Printf("stream cache: enabled at %s (max %d GB)", root, maxGB)
-	return &streamCache{
+	c := &streamCache{
 		root:     root,
 		maxBytes: int64(maxGB) * 1024 * 1024 * 1024,
 	}
+	c.totalBytes.Store(c.scanBytes())
+	log.Printf("stream cache: enabled at %s (max %d GB)", root, maxGB)
+	return c
+}
+
+// scanBytes walks the cache directory and returns the total size of .mp4 files.
+func (c *streamCache) scanBytes() int64 {
+	entries, err := os.ReadDir(c.root)
+	if err != nil {
+		return 0
+	}
+	var total int64
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".mp4") {
+			continue
+		}
+		if info, err := e.Info(); err == nil {
+			total += info.Size()
+		}
+	}
+	return total
 }
 
 // key derives a stable cache identifier from the source path, size, mtime,
@@ -74,12 +96,18 @@ func (c *streamCache) complete(key string, success bool) {
 		close(val.(chan struct{}))
 	}
 	if success {
-		if err := os.Rename(c.partialPath(key), c.finalPath(key)); err != nil {
+		dst := c.finalPath(key)
+		if err := os.Rename(c.partialPath(key), dst); err != nil {
 			log.Printf("stream cache: failed to finalize %s: %v", key, err)
 			os.Remove(c.partialPath(key))
 			return
 		}
-		go c.evict()
+		if info, err := os.Stat(dst); err == nil {
+			c.totalBytes.Add(info.Size())
+		}
+		if c.totalBytes.Load() > c.maxBytes {
+			go c.evict()
+		}
 	} else {
 		os.Remove(c.partialPath(key))
 	}
@@ -92,6 +120,10 @@ func (c *streamCache) evict() {
 	c.evictMu.Lock()
 	defer c.evictMu.Unlock()
 
+	if c.totalBytes.Load() <= c.maxBytes {
+		return
+	}
+
 	entries, err := os.ReadDir(c.root)
 	if err != nil {
 		return
@@ -103,7 +135,6 @@ func (c *streamCache) evict() {
 		mtime int64
 	}
 	var files []fi
-	var total int64
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".mp4") {
 			continue
@@ -113,22 +144,17 @@ func (c *streamCache) evict() {
 			continue
 		}
 		files = append(files, fi{name: e.Name(), size: info.Size(), mtime: info.ModTime().UnixNano()})
-		total += info.Size()
-	}
-
-	if total <= c.maxBytes {
-		return
 	}
 
 	sort.Slice(files, func(i, j int) bool { return files[i].mtime < files[j].mtime })
 	for _, f := range files {
-		if total <= c.maxBytes {
+		if c.totalBytes.Load() <= c.maxBytes {
 			break
 		}
 		if err := os.Remove(filepath.Join(c.root, f.name)); err != nil {
 			continue
 		}
-		total -= f.size
+		c.totalBytes.Add(-f.size)
 		log.Printf("stream cache: evicted %s (%.1f MB)", f.name, float64(f.size)/1024/1024)
 	}
 }
