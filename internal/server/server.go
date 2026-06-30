@@ -29,7 +29,7 @@ type Server struct {
 func New(cfg *config.Config) *Server {
 	s := &Server{config: cfg}
 	s.userData = NewUserDataStore(cfg.App.UserdataPath, cfg.App.UserdataFlushMinutes)
-	s.syncQueue = NewSyncQueueStore()
+	s.syncQueue = NewSyncQueueStore(cfg.App.KodiSyncRetentionDays)
 	s.streamCache = newStreamCache(cfg.App.CachePath, cfg.App.CacheMaxGB)
 	s.router = http.NewServeMux()
 	s.registerRoutes()
