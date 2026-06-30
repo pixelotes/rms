@@ -34,13 +34,6 @@ func ItemPath(id string) (string, error) {
 // PopulateIDStore walks all library paths, registers every directory and video file
 // in the ID store, and returns the IDs of newly added and removed items.
 func PopulateIDStore(libs []config.Library) (added, removed []string) {
-	// Snapshot the existing store: path → id (reverse of the store direction).
-	oldPaths := map[string]string{}
-	idStore.Range(func(k, v interface{}) bool {
-		oldPaths[v.(string)] = k.(string)
-		return true
-	})
-
 	// Walk all library directories and collect registrable paths.
 	newPaths := map[string]bool{}
 	for _, lib := range libs {
@@ -53,23 +46,19 @@ func PopulateIDStore(libs []config.Library) (added, removed []string) {
 	// Register new paths; collect added IDs.
 	for path := range newPaths {
 		id := ItemID(path)
-		if _, exists := oldPaths[path]; !exists {
+		if _, loaded := idStore.LoadOrStore(id, path); !loaded {
 			added = append(added, id)
 		}
-		idStore.Store(id, path)
 	}
 
-	// Collect removed IDs (paths no longer on disk) and delete them.
-	var toDelete []string
-	for path, id := range oldPaths {
-		if !newPaths[path] {
-			removed = append(removed, id)
-			toDelete = append(toDelete, id)
+	// Remove IDs whose paths are no longer on disk (single pass over the store).
+	idStore.Range(func(k, v interface{}) bool {
+		if !newPaths[v.(string)] {
+			removed = append(removed, k.(string))
+			idStore.Delete(k)
 		}
-	}
-	for _, id := range toDelete {
-		idStore.Delete(id)
-	}
+		return true
+	})
 
 	return added, removed
 }
