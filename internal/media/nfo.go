@@ -111,13 +111,14 @@ func ParseNFO(dir string) (NFOData, error) {
 		return NFOData{}, fmt.Errorf("no NFO in %s", dir)
 	}
 
-	data, err := os.ReadFile(nfoPath)
+	f, err := os.Open(nfoPath)
 	if err != nil {
 		return NFOData{}, err
 	}
+	defer f.Close()
 
 	var raw nfoRaw
-	if err := xml.Unmarshal(data, &raw); err != nil {
+	if err := xml.NewDecoder(f).Decode(&raw); err != nil {
 		return NFOData{}, err
 	}
 	if raw.Title == "" && raw.Plot == "" {
@@ -155,13 +156,14 @@ func ParseNFO(dir string) (NFOData, error) {
 // The NFO is expected at <videobase>.nfo.
 func ParseEpisodeNFO(videoPath string) (EpisodeNFOData, error) {
 	nfoPath := strings.TrimSuffix(videoPath, filepath.Ext(videoPath)) + ".nfo"
-	data, err := os.ReadFile(nfoPath)
+	f, err := os.Open(nfoPath)
 	if err != nil {
 		return EpisodeNFOData{}, err
 	}
+	defer f.Close()
 
 	var raw episodeNFORaw
-	if err := xml.Unmarshal(data, &raw); err != nil {
+	if err := xml.NewDecoder(f).Decode(&raw); err != nil {
 		return EpisodeNFOData{}, err
 	}
 
