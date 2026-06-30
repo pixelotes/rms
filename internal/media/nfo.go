@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+var runtimeRe = regexp.MustCompile(`<runtime>\d*</runtime>`)
+
 // NFOData holds parsed metadata from a Kodi movie/tvshow NFO file.
 type NFOData struct {
 	Title         string
@@ -198,7 +200,6 @@ func UpdateEpisodeRuntime(videoPath string, minutes int) {
 	}
 
 	replacement := fmt.Sprintf("<runtime>%d</runtime>", minutes)
-	runtimeRe := regexp.MustCompile(`<runtime>\d*</runtime>`)
 
 	var updated []byte
 	if runtimeRe.Match(data) {
