@@ -63,7 +63,19 @@ func (store *UserDataStore) Shutdown() {
 	store.flush()
 }
 
-func (store *UserDataStore) Get(userID, itemID string) map[string]interface{} {
+// UserDataDTO is the Jellyfin-shaped response for user data on a single item.
+type UserDataDTO struct {
+	PlaybackPositionTicks int64  `json:"PlaybackPositionTicks"`
+	PlayCount             int    `json:"PlayCount"`
+	IsFavorite            bool   `json:"IsFavorite"`
+	Played                bool   `json:"Played"`
+	Key                   string `json:"Key"`
+	ItemId                string `json:"ItemId"`
+	UnplayedItemCount     int    `json:"UnplayedItemCount"`
+	LastPlayedDate        string `json:"LastPlayedDate,omitempty"`
+}
+
+func (store *UserDataStore) Get(userID, itemID string) UserDataDTO {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 	return store.toDTO(itemID, store.getEntry(userID, itemID))
@@ -78,24 +90,14 @@ func (store *UserDataStore) getEntry(userID, itemID string) *UserDataEntry {
 	return nil
 }
 
-func (store *UserDataStore) toDTO(itemID string, entry *UserDataEntry) map[string]interface{} {
-	dto := map[string]interface{}{
-		"PlaybackPositionTicks": int64(0),
-		"PlayCount":             0,
-		"IsFavorite":            false,
-		"Played":                false,
-		"Key":                   itemID,
-		"ItemId":                itemID,
-		"UnplayedItemCount":     0,
-	}
+func (store *UserDataStore) toDTO(itemID string, entry *UserDataEntry) UserDataDTO {
+	dto := UserDataDTO{Key: itemID, ItemId: itemID}
 	if entry != nil {
-		dto["PlaybackPositionTicks"] = entry.PlaybackPositionTicks
-		dto["PlayCount"] = entry.PlayCount
-		dto["IsFavorite"] = entry.IsFavorite
-		dto["Played"] = entry.Played
-		if entry.LastPlayedDate != "" {
-			dto["LastPlayedDate"] = entry.LastPlayedDate
-		}
+		dto.PlaybackPositionTicks = entry.PlaybackPositionTicks
+		dto.PlayCount = entry.PlayCount
+		dto.IsFavorite = entry.IsFavorite
+		dto.Played = entry.Played
+		dto.LastPlayedDate = entry.LastPlayedDate
 	}
 	return dto
 }
