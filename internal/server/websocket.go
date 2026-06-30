@@ -267,7 +267,7 @@ func (s *Server) notifyUserData(userID, itemID string) {
 	}
 	s.wsHub.broadcast(userID, "UserDataChanged", map[string]interface{}{
 		"UserId":       userID,
-		"UserDataList": []map[string]interface{}{s.userData.Get(userID, itemID)},
+		"UserDataList": []UserDataDTO{s.userData.Get(userID, itemID)},
 	})
 }
 

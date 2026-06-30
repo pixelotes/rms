@@ -180,11 +180,19 @@ func (s *Server) itemMatches(item map[string]interface{}, q itemQuery, userID st
 			needUserData = true
 		}
 	}
-	var ud map[string]interface{}
+	var ud UserDataDTO
 	if needUserData {
 		ud = s.userData.Get(userID, id)
 	}
-	udBool := func(k string) bool { b, _ := ud[k].(bool); return b }
+	udBool := func(k string) bool {
+		switch k {
+		case "IsFavorite":
+			return ud.IsFavorite
+		case "Played":
+			return ud.Played
+		}
+		return false
+	}
 	if q.isFavorite != nil && udBool("IsFavorite") != *q.isFavorite {
 		return false
 	}
@@ -255,14 +263,14 @@ func (s *Server) sortItems(items []map[string]interface{}, q itemQuery, userID s
 		case "PremiereDate", "DateCreated", "DateLastContentAdded":
 			return strings.Compare(itemString(a, field), itemString(b, field))
 		case "DatePlayed", "DateLastPlayed":
-			return strings.Compare(itemString(s.userData.Get(userID, itemString(a, "Id")), "LastPlayedDate"),
-				itemString(s.userData.Get(userID, itemString(b, "Id")), "LastPlayedDate"))
+			return strings.Compare(s.userData.Get(userID, itemString(a, "Id")).LastPlayedDate,
+				s.userData.Get(userID, itemString(b, "Id")).LastPlayedDate)
 		case "PlayCount":
-			return itemInt(s.userData.Get(userID, itemString(a, "Id")), "PlayCount") -
-				itemInt(s.userData.Get(userID, itemString(b, "Id")), "PlayCount")
+			return s.userData.Get(userID, itemString(a, "Id")).PlayCount -
+				s.userData.Get(userID, itemString(b, "Id")).PlayCount
 		case "IsFavoriteOrLiked":
-			fa, _ := s.userData.Get(userID, itemString(a, "Id"))["IsFavorite"].(bool)
-			fb, _ := s.userData.Get(userID, itemString(b, "Id"))["IsFavorite"].(bool)
+			fa := s.userData.Get(userID, itemString(a, "Id")).IsFavorite
+			fb := s.userData.Get(userID, itemString(b, "Id")).IsFavorite
 			return boolCmp(fa, fb)
 		case "IsFolder":
 			fa, _ := a["IsFolder"].(bool)

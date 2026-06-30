@@ -384,10 +384,8 @@ func (s *Server) jfNextUp(w http.ResponseWriter, r *http.Request) {
 			}
 			s.patchItemsUserData(episodes, r)
 			for _, ep := range episodes {
-				if ud, ok := ep["UserData"].(map[string]interface{}); ok {
-					if played, _ := ud["Played"].(bool); played {
-						continue
-					}
+				if ud, ok := ep["UserData"].(UserDataDTO); ok && ud.Played {
+					continue
 				}
 				items = append(items, ep)
 				break
