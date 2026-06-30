@@ -51,14 +51,14 @@ func New(cfg *config.Config) *Server {
 func (s *Server) registerRoutes() {
 	// Static files (Web UI) - conditional
 	if s.config.App.UIEnabled {
-		noCache := func(h http.Handler) http.Handler {
+		withCache := func(h http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+				w.Header().Set("Cache-Control", "public, max-age=3600")
 				h.ServeHTTP(w, r)
 			})
 		}
-		s.router.PathPrefix("/css/").Handler(noCache(http.StripPrefix("/css/", http.FileServer(http.Dir("web/css")))))
-		s.router.PathPrefix("/js/").Handler(noCache(http.StripPrefix("/js/", http.FileServer(http.Dir("web/js")))))
+		s.router.PathPrefix("/css/").Handler(withCache(http.StripPrefix("/css/", http.FileServer(http.Dir("web/css")))))
+		s.router.PathPrefix("/js/").Handler(withCache(http.StripPrefix("/js/", http.FileServer(http.Dir("web/js")))))
 		s.router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 			http.ServeFile(w, r, "web/index.html")
