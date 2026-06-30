@@ -201,6 +201,10 @@ func UpdateEpisodeRuntime(videoPath string, minutes int) {
 
 	replacement := fmt.Sprintf("<runtime>%d</runtime>", minutes)
 
+	if existing := runtimeRe.Find(data); string(existing) == replacement {
+		return
+	}
+
 	var updated []byte
 	if runtimeRe.Match(data) {
 		updated = runtimeRe.ReplaceAll(data, []byte(replacement))
