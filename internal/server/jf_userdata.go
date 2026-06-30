@@ -18,11 +18,12 @@ import (
 // UserDataStore holds per-user item state in memory.
 // When filePath is set, data is persisted to a JSON file on disk.
 type UserDataStore struct {
-	mu       sync.RWMutex
-	data     map[string]map[string]*UserDataEntry
-	filePath string
-	dirty    bool
-	stopCh   chan struct{}
+	mu            sync.RWMutex
+	data          map[string]map[string]*UserDataEntry
+	filePath      string
+	flushInterval time.Duration
+	dirty         bool
+	stopCh        chan struct{}
 }
 
 type UserDataEntry struct {
@@ -35,11 +36,16 @@ type UserDataEntry struct {
 
 // NewUserDataStore creates a new store. If filePath is non-empty, data is
 // loaded from disk on startup and flushed periodically + on shutdown.
-func NewUserDataStore(filePath string) *UserDataStore {
+func NewUserDataStore(filePath string, flushMinutes int) *UserDataStore {
+	interval := time.Duration(flushMinutes) * time.Minute
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
 	store := &UserDataStore{
-		data:     make(map[string]map[string]*UserDataEntry),
-		filePath: filePath,
-		stopCh:   make(chan struct{}),
+		data:          make(map[string]map[string]*UserDataEntry),
+		filePath:      filePath,
+		flushInterval: interval,
+		stopCh:        make(chan struct{}),
 	}
 	if filePath != "" {
 		store.load()
@@ -183,7 +189,7 @@ func (store *UserDataStore) flush() {
 }
 
 func (store *UserDataStore) flushLoop() {
-	ticker := time.NewTicker(5 * time.Minute)
+	ticker := time.NewTicker(store.flushInterval)
 	defer ticker.Stop()
 	for {
 		select {

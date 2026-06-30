@@ -63,7 +63,8 @@ type AppConfig struct {
 	JWTSecret       string `yaml:"jwt_secret"`
 	JellyfinVersion string `yaml:"jellyfin_version"`
 	KodiSyncQueue   bool   `yaml:"kodi_sync_queue"`
-	UserdataPath    string `yaml:"userdata_path"`
+	UserdataPath         string `yaml:"userdata_path"`
+	UserdataFlushMinutes int    `yaml:"userdata_flush_minutes"` // 0 = default (5 min)
 	CachePath       string `yaml:"cache_path"`
 	CacheMaxGB      int    `yaml:"cache_max_gb"`
 	Debug           bool   `yaml:"debug"`
