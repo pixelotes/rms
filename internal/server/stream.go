@@ -8,13 +8,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gorilla/mux"
 
 	"raspberry-media-server/internal/media"
 )
 
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
-	filePath := mux.Vars(r)["filePath"]
+	filePath := r.PathValue("filePath")
 
 	// TV channel: resolve via the channel store and redirect to its stream.
 	if strings.HasPrefix(filePath, tvChanPathPrefix) {

@@ -3,7 +3,6 @@ package server
 import (
 	"net/http"
 
-	"github.com/gorilla/mux"
 )
 
 func (s *Server) jfSessionStub(w http.ResponseWriter, r *http.Request) {
@@ -39,7 +38,7 @@ func (s *Server) jfEmptyArray(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) jfDisplayPrefsStub(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"Id":               mux.Vars(r)["displayPrefsId"],
+		"Id":               r.PathValue("displayPrefsId"),
 		"SortBy":           "SortName",
 		"SortOrder":        "Ascending",
 		"RememberIndexing": false,

@@ -9,8 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/mux"
-
 	"raspberry-media-server/internal/config"
 	"raspberry-media-server/internal/media"
 )
@@ -18,12 +16,12 @@ import (
 type Server struct {
 	config      *config.Config
 	httpServer  *http.Server
-	router      *mux.Router
+	router      *http.ServeMux
 	userData    *UserDataStore
 	syncQueue   *SyncQueueStore
 	streamCache *streamCache
 
-	// webhook debounce (Paso 2)
+	// webhook debounce
 	rescanMu    sync.Mutex
 	rescanTimer *time.Timer
 }
@@ -33,14 +31,17 @@ func New(cfg *config.Config) *Server {
 	s.userData = NewUserDataStore(cfg.App.UserdataPath, cfg.App.UserdataFlushMinutes)
 	s.syncQueue = NewSyncQueueStore()
 	s.streamCache = newStreamCache(cfg.App.CachePath, cfg.App.CacheMaxGB)
-	s.router = mux.NewRouter()
-	if cfg.App.Debug {
-		s.router.Use(loggingMiddleware)
-	}
+	s.router = http.NewServeMux()
 	s.registerRoutes()
+
+	var handler http.Handler = s.router
+	if cfg.App.Debug {
+		handler = loggingMiddleware(handler)
+	}
+
 	s.httpServer = &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.App.Port),
-		Handler:      s.router,
+		Handler:      handler,
 		ReadTimeout:  0, // No timeout for streaming
 		WriteTimeout: 0, // No timeout for streaming
 		IdleTimeout:  120 * time.Second,
@@ -48,8 +49,23 @@ func New(cfg *config.Config) *Server {
 	return s
 }
 
+// jwt wraps a handler with RMS JWT/cookie authentication.
+func (s *Server) jwt(h http.HandlerFunc) http.Handler { return s.jwtMiddleware(h) }
+
+// jf wraps a handler with Jellyfin token authentication.
+func (s *Server) jf(h http.HandlerFunc) http.Handler { return s.jellyfinAuthMiddleware(h) }
+
+// route registers h for each method on pattern.
+func route(mux *http.ServeMux, pattern string, h http.Handler, methods ...string) {
+	for _, m := range methods {
+		mux.Handle(m+" "+pattern, h)
+	}
+}
+
 func (s *Server) registerRoutes() {
-	// Static files (Web UI) - conditional
+	mux := s.router
+
+	// Static files (Web UI)
 	if s.config.App.UIEnabled {
 		withCache := func(h http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -57,371 +73,358 @@ func (s *Server) registerRoutes() {
 				h.ServeHTTP(w, r)
 			})
 		}
-		s.router.PathPrefix("/css/").Handler(withCache(http.StripPrefix("/css/", http.FileServer(http.Dir("web/css")))))
-		s.router.PathPrefix("/js/").Handler(withCache(http.StripPrefix("/js/", http.FileServer(http.Dir("web/js")))))
-		s.router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		mux.Handle("/css/{path...}", withCache(http.StripPrefix("/css/", http.FileServer(http.Dir("web/css")))))
+		mux.Handle("/js/{path...}", withCache(http.StripPrefix("/js/", http.FileServer(http.Dir("web/js")))))
+		mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 			http.ServeFile(w, r, "web/index.html")
 		})
 	}
 
 	// === RMS Native API ===
-	api := s.router.PathPrefix("/api/v1").Subrouter()
 
 	// Public
-	api.HandleFunc("/login", s.handleLogin).Methods("POST")
-	api.HandleFunc("/logout", s.handleLogout).Methods("POST")
+	mux.Handle("POST /api/v1/login", http.HandlerFunc(s.handleLogin))
+	mux.Handle("POST /api/v1/logout", http.HandlerFunc(s.handleLogout))
 
 	// Protected (JWT Bearer or session cookie)
-	protected := api.PathPrefix("").Subrouter()
-	protected.Use(s.jwtMiddleware)
-	protected.HandleFunc("/me", s.handleMe).Methods("GET")
-	protected.HandleFunc("/config", s.handleClientConfig).Methods("GET")
-	protected.HandleFunc("/browse", s.handleBrowse).Methods("GET")
-	protected.HandleFunc("/stream/{filePath:.+}", s.handleStream).Methods("GET")
-	protected.HandleFunc("/subtitles/{filePath:.+}", s.handleSubtitles).Methods("GET")
-	protected.HandleFunc("/subtitles-list/{filePath:.+}", s.handleSubtitlesList).Methods("GET")
-	protected.HandleFunc("/subtitles-search/{filePath:.+}", s.handleSearchSubtitles).Methods("POST")
-	protected.HandleFunc("/subtitles-download/{filePath:.+}", s.handleDownloadSubtitle).Methods("POST")
-	protected.HandleFunc("/images/{imageId}", s.handleImage).Methods("GET")
+	mux.Handle("GET /api/v1/me", s.jwt(s.handleMe))
+	mux.Handle("GET /api/v1/config", s.jwt(s.handleClientConfig))
+	mux.Handle("GET /api/v1/browse", s.jwt(s.handleBrowse))
+	mux.Handle("GET /api/v1/stream/{filePath...}", s.jwt(s.handleStream))
+	mux.Handle("GET /api/v1/subtitles/{filePath...}", s.jwt(s.handleSubtitles))
+	mux.Handle("GET /api/v1/subtitles-list/{filePath...}", s.jwt(s.handleSubtitlesList))
+	mux.Handle("POST /api/v1/subtitles-search/{filePath...}", s.jwt(s.handleSearchSubtitles))
+	mux.Handle("POST /api/v1/subtitles-download/{filePath...}", s.jwt(s.handleDownloadSubtitle))
+	mux.Handle("GET /api/v1/images/{imageId}", s.jwt(s.handleImage))
 	if s.hasTVLibraries() {
-		protected.HandleFunc("/tv/logo/{channelId}", s.handleTVLogo).Methods("GET")
+		mux.Handle("GET /api/v1/tv/logo/{channelId}", s.jwt(s.handleTVLogo))
 	}
-	protected.HandleFunc("/duration/{filePath:.+}", s.handleDuration).Methods("GET")
-	protected.HandleFunc("/crawl/metadata", s.handleCrawlMetadata).Methods("POST")
-	protected.HandleFunc("/crawl/subtitles", s.handleCrawlSubtitles).Methods("POST")
-	protected.HandleFunc("/crawl/thumbnails", s.handleCrawlThumbnails).Methods("POST")
-	protected.HandleFunc("/library/rescan", s.handleRescan).Methods("POST")
+	mux.Handle("GET /api/v1/duration/{filePath...}", s.jwt(s.handleDuration))
+	mux.Handle("POST /api/v1/crawl/metadata", s.jwt(s.handleCrawlMetadata))
+	mux.Handle("POST /api/v1/crawl/subtitles", s.jwt(s.handleCrawlSubtitles))
+	mux.Handle("POST /api/v1/crawl/thumbnails", s.jwt(s.handleCrawlThumbnails))
+	mux.Handle("POST /api/v1/library/rescan", s.jwt(s.handleRescan))
 
-	// Webhook rescan — token-authenticated, no JWT required (for Sonarr/Radarr/scripts)
+	// Webhook rescan — token-authenticated, no JWT required
 	if s.config.App.WebhookToken != "" {
-		api.HandleFunc("/library/rescan-hook", s.handleRescanHook).Methods("POST")
+		mux.Handle("POST /api/v1/library/rescan-hook", http.HandlerFunc(s.handleRescanHook))
 	}
 
 	// === Jellyfin-Compatible API ===
-	jf := s.router.PathPrefix("").Subrouter()
 
 	// Jellyfin public endpoints
-	jf.HandleFunc("/System/Info/Public", s.jfSystemInfoPublic).Methods("GET")
-	jf.HandleFunc("/system/info/public", s.jfSystemInfoPublic).Methods("GET")
-	jf.HandleFunc("/Users/Public", s.jfUsersPublic).Methods("GET")
-	jf.HandleFunc("/Users/AuthenticateByName", s.jfAuthenticateByName).Methods("POST")
-	jf.HandleFunc("/Branding/Configuration", s.jfBrandingConfig).Methods("GET")
-	jf.HandleFunc("/Branding/Css", s.jfBrandingCSS).Methods("GET")
-	jf.HandleFunc("/Branding/Css.css", s.jfBrandingCSS).Methods("GET")
-	jf.HandleFunc("/Branding/Splashscreen", s.jfNotFound).Methods("GET", "POST", "DELETE")
-	jf.HandleFunc("/QuickConnect/Enabled", s.jfQuickConnectEnabled).Methods("GET")
-	jf.HandleFunc("/QuickConnect/Initiate", s.jfQuickConnectInitiate).Methods("POST", "GET")
-	jf.HandleFunc("/QuickConnect/Authorize", s.jfQuickConnectUnavailable).Methods("POST")
-	jf.HandleFunc("/QuickConnect/Connect", s.jfQuickConnectUnavailable).Methods("GET")
+	mux.Handle("GET /System/Info/Public", http.HandlerFunc(s.jfSystemInfoPublic))
+	mux.Handle("GET /system/info/public", http.HandlerFunc(s.jfSystemInfoPublic))
+	mux.Handle("GET /Users/Public", http.HandlerFunc(s.jfUsersPublic))
+	mux.Handle("POST /Users/AuthenticateByName", http.HandlerFunc(s.jfAuthenticateByName))
+	mux.Handle("GET /Branding/Configuration", http.HandlerFunc(s.jfBrandingConfig))
+	mux.Handle("GET /Branding/Css", http.HandlerFunc(s.jfBrandingCSS))
+	mux.Handle("GET /Branding/Css.css", http.HandlerFunc(s.jfBrandingCSS))
+	route(mux, "/Branding/Splashscreen", http.HandlerFunc(s.jfNotFound), "GET", "POST", "DELETE")
+	mux.Handle("GET /QuickConnect/Enabled", http.HandlerFunc(s.jfQuickConnectEnabled))
+	route(mux, "/QuickConnect/Initiate", http.HandlerFunc(s.jfQuickConnectInitiate), "POST", "GET")
+	mux.Handle("POST /QuickConnect/Authorize", http.HandlerFunc(s.jfQuickConnectUnavailable))
+	mux.Handle("GET /QuickConnect/Connect", http.HandlerFunc(s.jfQuickConnectUnavailable))
 
-	// Images - public (clients load these as direct URLs without auth headers)
-	// Some clients use lowercase "/items/" so register both variants.
-	jf.HandleFunc("/Items/{itemId}/Images/{imageType}", s.jfGetItemImage).Methods("GET", "HEAD")
-	jf.HandleFunc("/Items/{itemId}/Images/{imageType}/{imageIndex}", s.jfGetItemImage).Methods("GET", "HEAD")
-	jf.HandleFunc("/Items/{itemId}/Images/{imageType}/{imageIndex}/{tag}/{format}/{maxWidth}/{maxHeight}/{percentPlayed}/{unplayedCount}", s.jfGetItemImage).Methods("GET", "HEAD")
-	jf.HandleFunc("/items/{itemId}/Images/{imageType}", s.jfGetItemImage).Methods("GET", "HEAD")
-	jf.HandleFunc("/items/{itemId}/Images/{imageType}/{imageIndex}", s.jfGetItemImage).Methods("GET", "HEAD")
-	jf.HandleFunc("/items/{itemId}/Images/{imageType}/{imageIndex}/{tag}/{format}/{maxWidth}/{maxHeight}/{percentPlayed}/{unplayedCount}", s.jfGetItemImage).Methods("GET", "HEAD")
+	// Images — public (clients load these as direct URLs without auth headers)
+	route(mux, "/Items/{itemId}/Images/{imageType}", http.HandlerFunc(s.jfGetItemImage), "GET", "HEAD")
+	route(mux, "/Items/{itemId}/Images/{imageType}/{imageIndex}", http.HandlerFunc(s.jfGetItemImage), "GET", "HEAD")
+	route(mux, "/Items/{itemId}/Images/{imageType}/{imageIndex}/{tag}/{format}/{maxWidth}/{maxHeight}/{percentPlayed}/{unplayedCount}", http.HandlerFunc(s.jfGetItemImage), "GET", "HEAD")
+	route(mux, "/items/{itemId}/Images/{imageType}", http.HandlerFunc(s.jfGetItemImage), "GET", "HEAD")
+	route(mux, "/items/{itemId}/Images/{imageType}/{imageIndex}", http.HandlerFunc(s.jfGetItemImage), "GET", "HEAD")
+	route(mux, "/items/{itemId}/Images/{imageType}/{imageIndex}/{tag}/{format}/{maxWidth}/{maxHeight}/{percentPlayed}/{unplayedCount}", http.HandlerFunc(s.jfGetItemImage), "GET", "HEAD")
 
-	// Streaming - public (media players like ExoPlayer/AVPlayer use bare URLs without auth headers)
-	jf.HandleFunc("/Videos/{itemId}/stream", s.jfVideoStream).Methods("GET", "HEAD")
-	jf.HandleFunc("/Videos/{itemId}/stream.{container}", s.jfVideoStream).Methods("GET", "HEAD")
-	jf.HandleFunc("/Audio/{itemId}/stream", s.jfVideoStream).Methods("GET", "HEAD")
-	jf.HandleFunc("/Audio/{itemId}/stream.{container}", s.jfVideoStream).Methods("GET", "HEAD")
-	jf.HandleFunc("/Audio/{itemId}/universal", s.jfVideoStream).Methods("GET", "HEAD")
-	jf.HandleFunc("/Videos/{itemId}/{sourceId}/Subtitles/{index}/{tick}/Stream.{format}", s.jfSubtitleStream).Methods("GET")
-	jf.HandleFunc("/Videos/{itemId}/{sourceId}/Subtitles/{index}/Stream.{format}", s.jfSubtitleStream).Methods("GET")
+	// Streaming — public (media players use bare URLs without auth headers)
+	route(mux, "/Videos/{itemId}/stream", http.HandlerFunc(s.jfVideoStream), "GET", "HEAD")
+	route(mux, "/Videos/{itemId}/stream.{container}", http.HandlerFunc(s.jfVideoStream), "GET", "HEAD")
+	route(mux, "/Audio/{itemId}/stream", http.HandlerFunc(s.jfVideoStream), "GET", "HEAD")
+	route(mux, "/Audio/{itemId}/stream.{container}", http.HandlerFunc(s.jfVideoStream), "GET", "HEAD")
+	route(mux, "/Audio/{itemId}/universal", http.HandlerFunc(s.jfVideoStream), "GET", "HEAD")
+	mux.Handle("GET /Videos/{itemId}/{sourceId}/Subtitles/{index}/{tick}/Stream.{format}", http.HandlerFunc(s.jfSubtitleStream))
+	mux.Handle("GET /Videos/{itemId}/{sourceId}/Subtitles/{index}/Stream.{format}", http.HandlerFunc(s.jfSubtitleStream))
 
-	// Jellyfin protected endpoints
-	jfAuth := s.router.PathPrefix("").Subrouter()
-	jfAuth.Use(s.jellyfinAuthMiddleware)
+	// === Jellyfin protected endpoints ===
 
-	// System (register both cases — some clients use lowercase)
-	jfAuth.HandleFunc("/System/Info", s.jfSystemInfo).Methods("GET")
-	jfAuth.HandleFunc("/system/info", s.jfSystemInfo).Methods("GET")
-	jfAuth.HandleFunc("/System/Endpoint", s.jfSystemEndpoint).Methods("GET")
-	jfAuth.HandleFunc("/System/Ping", s.jfSystemPing).Methods("GET", "POST")
-	jfAuth.HandleFunc("/System/ActivityLog/Entries", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/System/Logs", s.jfEmptyArray).Methods("GET")
-	jfAuth.HandleFunc("/System/Logs/Log", s.jfNotFound).Methods("GET")
-	jfAuth.HandleFunc("/System/Configuration", s.jfSystemConfiguration).Methods("GET")
-	jfAuth.HandleFunc("/System/Configuration", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/System/Configuration/Branding", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/System/Configuration/encoding", s.jfEncodingConfig).Methods("GET")
-	jfAuth.HandleFunc("/System/Configuration/MetadataOptions/Default", s.jfMetadataOptionsDefault).Methods("GET")
-	jfAuth.HandleFunc("/System/Configuration/{key}", s.jfSystemConfigurationValue).Methods("GET")
-	jfAuth.HandleFunc("/System/Configuration/{key}", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/System/Restart", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/System/Shutdown", s.jfSessionStub).Methods("POST")
+	// System
+	mux.Handle("GET /System/Info", s.jf(s.jfSystemInfo))
+	mux.Handle("GET /system/info", s.jf(s.jfSystemInfo))
+	mux.Handle("GET /System/Endpoint", s.jf(s.jfSystemEndpoint))
+	route(mux, "/System/Ping", s.jf(s.jfSystemPing), "GET", "POST")
+	mux.Handle("GET /System/ActivityLog/Entries", s.jf(s.jfEmptyItems))
+	mux.Handle("GET /System/Logs", s.jf(s.jfEmptyArray))
+	mux.Handle("GET /System/Logs/Log", s.jf(s.jfNotFound))
+	mux.Handle("GET /System/Configuration", s.jf(s.jfSystemConfiguration))
+	mux.Handle("POST /System/Configuration", s.jf(s.jfSessionStub))
+	mux.Handle("POST /System/Configuration/Branding", s.jf(s.jfSessionStub))
+	mux.Handle("GET /System/Configuration/encoding", s.jf(s.jfEncodingConfig))
+	mux.Handle("GET /System/Configuration/MetadataOptions/Default", s.jf(s.jfMetadataOptionsDefault))
+	mux.Handle("GET /System/Configuration/{key}", s.jf(s.jfSystemConfigurationValue))
+	mux.Handle("POST /System/Configuration/{key}", s.jf(s.jfSessionStub))
+	mux.Handle("POST /System/Restart", s.jf(s.jfSessionStub))
+	mux.Handle("POST /System/Shutdown", s.jf(s.jfSessionStub))
 	if s.jfVersionAtLeast(10, 11) {
-		jfAuth.HandleFunc("/System/Storage", s.jfSystemStorage).Methods("GET")
-		jfAuth.HandleFunc("/System/Info/Storage", s.jfSystemStorage).Methods("GET")
+		mux.Handle("GET /System/Storage", s.jf(s.jfSystemStorage))
+		mux.Handle("GET /System/Info/Storage", s.jf(s.jfSystemStorage))
 	}
 
 	// Users & Items
-	jfAuth.HandleFunc("/Users", s.jfGetUsers).Methods("GET")
-	jfAuth.HandleFunc("/Users", s.jfGetCurrentUser).Methods("POST")
-	jfAuth.HandleFunc("/UserViews", s.jfGetViews).Methods("GET")
-	jfAuth.HandleFunc("/UserViews/GroupingOptions", s.jfGroupingOptions).Methods("GET")
-	jfAuth.HandleFunc("/Users/{userId}/Views", s.jfGetViews).Methods("GET")
-	jfAuth.HandleFunc("/Users/{userId}/Items/Latest", s.jfGetLatest).Methods("GET")
-	jfAuth.HandleFunc("/Users/{userId}/Items/Resume", s.jfGetResumeItems).Methods("GET")
-	jfAuth.HandleFunc("/Users/{userId}/Items", s.jfGetItems).Methods("GET")
-	jfAuth.HandleFunc("/Users/{userId}/Items/{itemId}/Intros", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Users/{userId}/Items/{itemId}/LocalTrailers", s.jfEmptyArray).Methods("GET")
-	jfAuth.HandleFunc("/Users/{userId}/Items/{itemId}/SpecialFeatures", s.jfEmptyArray).Methods("GET")
-	jfAuth.HandleFunc("/Users/{userId}/Items/{itemId}", s.jfGetItem).Methods("GET")
-	jfAuth.HandleFunc("/Users/Me", s.jfGetCurrentUser).Methods("GET")
-	jfAuth.HandleFunc("/Users/{userId}", s.jfGetUser).Methods("GET")
-	jfAuth.HandleFunc("/Users/{userId}", s.jfSessionStub).Methods("DELETE")
-	jfAuth.HandleFunc("/Users/{userId}/Policy", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Users/AuthenticateWithQuickConnect", s.jfQuickConnectUnavailable).Methods("POST")
-	jfAuth.HandleFunc("/Users/Configuration", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Users/ForgotPassword", s.jfForgotPassword).Methods("POST")
-	jfAuth.HandleFunc("/Users/ForgotPassword/Pin", s.jfForgotPasswordPin).Methods("POST")
-	jfAuth.HandleFunc("/Users/New", s.jfGetCurrentUser).Methods("POST")
-	jfAuth.HandleFunc("/Users/Password", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Items", s.jfGetItems).Methods("GET")
+	mux.Handle("GET /Users", s.jf(s.jfGetUsers))
+	mux.Handle("POST /Users", s.jf(s.jfGetCurrentUser))
+	mux.Handle("GET /UserViews", s.jf(s.jfGetViews))
+	mux.Handle("GET /UserViews/GroupingOptions", s.jf(s.jfGroupingOptions))
+	mux.Handle("GET /Users/{userId}/Views", s.jf(s.jfGetViews))
+	mux.Handle("GET /Users/{userId}/Items/Latest", s.jf(s.jfGetLatest))
+	mux.Handle("GET /Users/{userId}/Items/Resume", s.jf(s.jfGetResumeItems))
+	mux.Handle("GET /Users/{userId}/Items", s.jf(s.jfGetItems))
+	mux.Handle("GET /Users/{userId}/Items/{itemId}/Intros", s.jf(s.jfEmptyItems))
+	mux.Handle("GET /Users/{userId}/Items/{itemId}/LocalTrailers", s.jf(s.jfEmptyArray))
+	mux.Handle("GET /Users/{userId}/Items/{itemId}/SpecialFeatures", s.jf(s.jfEmptyArray))
+	mux.Handle("GET /Users/{userId}/Items/{itemId}", s.jf(s.jfGetItem))
+	mux.Handle("GET /Users/Me", s.jf(s.jfGetCurrentUser))
+	mux.Handle("GET /Users/{userId}", s.jf(s.jfGetUser))
+	mux.Handle("DELETE /Users/{userId}", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Users/{userId}/Policy", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Users/AuthenticateWithQuickConnect", s.jf(s.jfQuickConnectUnavailable))
+	mux.Handle("POST /Users/Configuration", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Users/ForgotPassword", s.jf(s.jfForgotPassword))
+	mux.Handle("POST /Users/ForgotPassword/Pin", s.jf(s.jfForgotPasswordPin))
+	mux.Handle("POST /Users/New", s.jf(s.jfGetCurrentUser))
+	mux.Handle("POST /Users/Password", s.jf(s.jfSessionStub))
+	mux.Handle("GET /Items", s.jf(s.jfGetItems))
 
 	// Items sub-endpoints (must be before /Items/{itemId} catch-all)
-	jfAuth.HandleFunc("/Items/Latest", s.jfGetLatest).Methods("GET")
-	jfAuth.HandleFunc("/Items/Root", s.jfGetRoot).Methods("GET")
-	jfAuth.HandleFunc("/Items/Suggestions", s.jfGetSuggestions).Methods("GET")
-	jfAuth.HandleFunc("/Items/Filters", s.jfGetFilters).Methods("GET")
-	jfAuth.HandleFunc("/Items/Filters2", s.jfGetFilters).Methods("GET")
-	jfAuth.HandleFunc("/Items/Counts", s.jfItemCounts).Methods("GET")
-	jfAuth.HandleFunc("/Items/{itemId}/Images", s.jfItemImages).Methods("GET")
-	jfAuth.HandleFunc("/Items/{itemId}/Images/{imageType}", s.jfSessionStub).Methods("POST", "DELETE")
-	jfAuth.HandleFunc("/Items/{itemId}/Images/{imageType}/{imageIndex}", s.jfSessionStub).Methods("POST", "DELETE")
-	jfAuth.HandleFunc("/Items/{itemId}/Images/{imageType}/{imageIndex}/Index", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Items/{itemId}/InstantMix", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Items/{itemId}/ExternalIdInfos", s.jfExternalIdInfos).Methods("GET")
-	jfAuth.HandleFunc("/Items/{itemId}/MetadataEditor", s.jfMetadataEditor).Methods("GET")
-	jfAuth.HandleFunc("/Items/{itemId}/CriticReviews", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Items/{itemId}/RemoteImages", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Items/{itemId}/RemoteImages/Providers", s.jfEmptyArray).Methods("GET")
-	jfAuth.HandleFunc("/Items/{itemId}/RemoteImages/Download", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Items/{itemId}/RemoteSearch/Subtitles/{language}", s.jfEmptyArray).Methods("GET")
-	jfAuth.HandleFunc("/Items/{itemId}/RemoteSearch/Subtitles/{subtitleId}", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Items/RemoteSearch/Apply/{itemId}", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Items/RemoteSearch/Book", s.jfEmptyArray).Methods("POST")
-	jfAuth.HandleFunc("/Items/RemoteSearch/BoxSet", s.jfEmptyArray).Methods("POST")
-	jfAuth.HandleFunc("/Items/RemoteSearch/Movie", s.jfEmptyArray).Methods("POST")
-	jfAuth.HandleFunc("/Items/RemoteSearch/MusicAlbum", s.jfEmptyArray).Methods("POST")
-	jfAuth.HandleFunc("/Items/RemoteSearch/MusicArtist", s.jfEmptyArray).Methods("POST")
-	jfAuth.HandleFunc("/Items/RemoteSearch/MusicVideo", s.jfEmptyArray).Methods("POST")
-	jfAuth.HandleFunc("/Items/RemoteSearch/Person", s.jfEmptyArray).Methods("POST")
-	jfAuth.HandleFunc("/Items/RemoteSearch/Series", s.jfEmptyArray).Methods("POST")
-	jfAuth.HandleFunc("/Items/RemoteSearch/Trailer", s.jfEmptyArray).Methods("POST")
-	jfAuth.HandleFunc("/Items/{itemId}/Refresh", s.jfRefreshLibrary).Methods("POST")
-	jfAuth.HandleFunc("/Items/{itemId}/ContentType", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Items/{itemId}/Download", s.jfVideoStream).Methods("GET", "HEAD")
-	jfAuth.HandleFunc("/Items/{itemId}/File", s.jfVideoStream).Methods("GET", "HEAD")
-	jfAuth.HandleFunc("/Items/{itemId}/Similar", s.jfSimilarItems).Methods("GET")
-	jfAuth.HandleFunc("/Items/{itemId}/Ancestors", s.jfGetAncestors).Methods("GET")
-	jfAuth.HandleFunc("/Items/{itemId}/Intros", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Items/{itemId}/ThemeMedia", s.jfThemeMedia).Methods("GET")
-	jfAuth.HandleFunc("/Items/{itemId}/ThemeSongs", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Items/{itemId}/ThemeVideos", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Items/{itemId}/SpecialFeatures", s.jfEmptyArray).Methods("GET")
-	jfAuth.HandleFunc("/Items/{itemId}/LocalTrailers", s.jfEmptyArray).Methods("GET")
-	// Jellyfin 12.0+: collections containing the item. RMS has no collections (no DB) → empty result.
-	jfAuth.HandleFunc("/Items/{itemId}/Collections", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Items/{itemId}", s.jfGetItem).Methods("GET")
-	jfAuth.HandleFunc("/Items/{itemId}", s.jfSessionStub).Methods("POST", "DELETE")
-	jfAuth.HandleFunc("/Items", s.jfSessionStub).Methods("DELETE")
+	mux.Handle("GET /Items/Latest", s.jf(s.jfGetLatest))
+	mux.Handle("GET /Items/Root", s.jf(s.jfGetRoot))
+	mux.Handle("GET /Items/Suggestions", s.jf(s.jfGetSuggestions))
+	mux.Handle("GET /Items/Filters", s.jf(s.jfGetFilters))
+	mux.Handle("GET /Items/Filters2", s.jf(s.jfGetFilters))
+	mux.Handle("GET /Items/Counts", s.jf(s.jfItemCounts))
+	mux.Handle("GET /Items/{itemId}/Images", s.jf(s.jfItemImages))
+	route(mux, "/Items/{itemId}/Images/{imageType}", s.jf(s.jfSessionStub), "POST", "DELETE")
+	route(mux, "/Items/{itemId}/Images/{imageType}/{imageIndex}", s.jf(s.jfSessionStub), "POST", "DELETE")
+	mux.Handle("POST /Items/{itemId}/Images/{imageType}/{imageIndex}/Index", s.jf(s.jfSessionStub))
+	mux.Handle("GET /Items/{itemId}/InstantMix", s.jf(s.jfEmptyItems))
+	mux.Handle("GET /Items/{itemId}/ExternalIdInfos", s.jf(s.jfExternalIdInfos))
+	mux.Handle("GET /Items/{itemId}/MetadataEditor", s.jf(s.jfMetadataEditor))
+	mux.Handle("GET /Items/{itemId}/CriticReviews", s.jf(s.jfEmptyItems))
+	mux.Handle("GET /Items/{itemId}/RemoteImages", s.jf(s.jfEmptyItems))
+	mux.Handle("GET /Items/{itemId}/RemoteImages/Providers", s.jf(s.jfEmptyArray))
+	mux.Handle("POST /Items/{itemId}/RemoteImages/Download", s.jf(s.jfSessionStub))
+	mux.Handle("GET /Items/{itemId}/RemoteSearch/Subtitles/{language}", s.jf(s.jfEmptyArray))
+	mux.Handle("POST /Items/{itemId}/RemoteSearch/Subtitles/{subtitleId}", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Items/RemoteSearch/Apply/{itemId}", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Items/RemoteSearch/Book", s.jf(s.jfEmptyArray))
+	mux.Handle("POST /Items/RemoteSearch/BoxSet", s.jf(s.jfEmptyArray))
+	mux.Handle("POST /Items/RemoteSearch/Movie", s.jf(s.jfEmptyArray))
+	mux.Handle("POST /Items/RemoteSearch/MusicAlbum", s.jf(s.jfEmptyArray))
+	mux.Handle("POST /Items/RemoteSearch/MusicArtist", s.jf(s.jfEmptyArray))
+	mux.Handle("POST /Items/RemoteSearch/MusicVideo", s.jf(s.jfEmptyArray))
+	mux.Handle("POST /Items/RemoteSearch/Person", s.jf(s.jfEmptyArray))
+	mux.Handle("POST /Items/RemoteSearch/Series", s.jf(s.jfEmptyArray))
+	mux.Handle("POST /Items/RemoteSearch/Trailer", s.jf(s.jfEmptyArray))
+	mux.Handle("POST /Items/{itemId}/Refresh", s.jf(s.jfRefreshLibrary))
+	mux.Handle("POST /Items/{itemId}/ContentType", s.jf(s.jfSessionStub))
+	route(mux, "/Items/{itemId}/Download", s.jf(s.jfVideoStream), "GET", "HEAD")
+	route(mux, "/Items/{itemId}/File", s.jf(s.jfVideoStream), "GET", "HEAD")
+	mux.Handle("GET /Items/{itemId}/Similar", s.jf(s.jfSimilarItems))
+	mux.Handle("GET /Items/{itemId}/Ancestors", s.jf(s.jfGetAncestors))
+	mux.Handle("GET /Items/{itemId}/Intros", s.jf(s.jfEmptyItems))
+	mux.Handle("GET /Items/{itemId}/ThemeMedia", s.jf(s.jfThemeMedia))
+	mux.Handle("GET /Items/{itemId}/ThemeSongs", s.jf(s.jfEmptyItems))
+	mux.Handle("GET /Items/{itemId}/ThemeVideos", s.jf(s.jfEmptyItems))
+	mux.Handle("GET /Items/{itemId}/SpecialFeatures", s.jf(s.jfEmptyArray))
+	mux.Handle("GET /Items/{itemId}/LocalTrailers", s.jf(s.jfEmptyArray))
+	mux.Handle("GET /Items/{itemId}/Collections", s.jf(s.jfEmptyItems))
+	mux.Handle("GET /Items/{itemId}", s.jf(s.jfGetItem))
+	route(mux, "/Items/{itemId}", s.jf(s.jfSessionStub), "POST", "DELETE")
+	mux.Handle("DELETE /Items", s.jf(s.jfSessionStub))
 
 	// TV Shows
-	jfAuth.HandleFunc("/Shows/{showId}/Seasons", s.jfGetSeasons).Methods("GET")
-	jfAuth.HandleFunc("/Shows/{showId}/Episodes", s.jfGetEpisodes).Methods("GET")
-	jfAuth.HandleFunc("/Shows/NextUp", s.jfNextUp).Methods("GET")
-	jfAuth.HandleFunc("/Shows/Upcoming", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Shows/{itemId}/Similar", s.jfSimilarItems).Methods("GET")
-	jfAuth.HandleFunc("/Movies/{itemId}/Similar", s.jfSimilarItems).Methods("GET")
-	jfAuth.HandleFunc("/Movies/Recommendations", s.jfMovieRecommendations).Methods("GET")
-	jfAuth.HandleFunc("/Videos/{itemId}/AdditionalParts", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Videos/{videoId}/{mediaSourceId}/Attachments/{index}", s.jfNotFound).Methods("GET")
-	jfAuth.HandleFunc("/Videos/{itemId}/Subtitles", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Videos/{itemId}/Subtitles/{index}", s.jfSessionStub).Methods("DELETE")
-	jfAuth.HandleFunc("/Videos/{itemId}/AlternateSources", s.jfSessionStub).Methods("DELETE")
-	jfAuth.HandleFunc("/Videos/MergeVersions", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Audio/{itemId}/Lyrics", s.jfEmptyObject).Methods("GET")
-	jfAuth.HandleFunc("/Audio/{itemId}/Lyrics", s.jfSessionStub).Methods("POST", "DELETE")
-	jfAuth.HandleFunc("/Audio/{itemId}/RemoteSearch/Lyrics", s.jfEmptyArray).Methods("GET")
-	jfAuth.HandleFunc("/Audio/{itemId}/RemoteSearch/Lyrics/{lyricId}", s.jfSessionStub).Methods("POST")
+	mux.Handle("GET /Shows/{showId}/Seasons", s.jf(s.jfGetSeasons))
+	mux.Handle("GET /Shows/{showId}/Episodes", s.jf(s.jfGetEpisodes))
+	mux.Handle("GET /Shows/NextUp", s.jf(s.jfNextUp))
+	mux.Handle("GET /Shows/Upcoming", s.jf(s.jfEmptyItems))
+	mux.Handle("GET /Shows/{itemId}/Similar", s.jf(s.jfSimilarItems))
+	mux.Handle("GET /Movies/{itemId}/Similar", s.jf(s.jfSimilarItems))
+	mux.Handle("GET /Movies/Recommendations", s.jf(s.jfMovieRecommendations))
+	mux.Handle("GET /Videos/{itemId}/AdditionalParts", s.jf(s.jfEmptyItems))
+	mux.Handle("GET /Videos/{videoId}/{mediaSourceId}/Attachments/{index}", s.jf(s.jfNotFound))
+	mux.Handle("POST /Videos/{itemId}/Subtitles", s.jf(s.jfSessionStub))
+	mux.Handle("DELETE /Videos/{itemId}/Subtitles/{index}", s.jf(s.jfSessionStub))
+	mux.Handle("DELETE /Videos/{itemId}/AlternateSources", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Videos/MergeVersions", s.jf(s.jfSessionStub))
+	mux.Handle("GET /Audio/{itemId}/Lyrics", s.jf(s.jfEmptyObject))
+	route(mux, "/Audio/{itemId}/Lyrics", s.jf(s.jfSessionStub), "POST", "DELETE")
+	mux.Handle("GET /Audio/{itemId}/RemoteSearch/Lyrics", s.jf(s.jfEmptyArray))
+	mux.Handle("POST /Audio/{itemId}/RemoteSearch/Lyrics/{lyricId}", s.jf(s.jfSessionStub))
 
 	// Playback
-	jfAuth.HandleFunc("/Items/{itemId}/PlaybackInfo", s.jfPlaybackInfo).Methods("POST", "GET")
-	jfAuth.HandleFunc("/Playback/BitrateTest", s.jfBitrateTest).Methods("GET")
+	route(mux, "/Items/{itemId}/PlaybackInfo", s.jf(s.jfPlaybackInfo), "POST", "GET")
+	mux.Handle("GET /Playback/BitrateTest", s.jf(s.jfBitrateTest))
 
 	// Sessions
-	jfAuth.HandleFunc("/Sessions", s.jfSessionsStub).Methods("GET")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/Command", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/Command/{command}", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/Message", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/Playing", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/Playing/{command}", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/System/{command}", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/User/{userId}", s.jfSessionStub).Methods("POST", "DELETE")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/Viewing", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/Viewing", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/Capabilities", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/Capabilities/Full", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/Playing", s.jfReportPlayback).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/Playing/Progress", s.jfReportPlayback).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/Playing/Stopped", s.jfReportPlaybackStopped).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/Playing/Ping", s.jfSessionStub).Methods("POST")
-
-	// Sessions (10.11+)
+	mux.Handle("GET /Sessions", s.jf(s.jfSessionsStub))
+	mux.Handle("POST /Sessions/{sessionId}/Command", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Sessions/{sessionId}/Command/{command}", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Sessions/{sessionId}/Message", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Sessions/{sessionId}/Playing", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Sessions/{sessionId}/Playing/{command}", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Sessions/{sessionId}/System/{command}", s.jf(s.jfSessionStub))
+	route(mux, "/Sessions/{sessionId}/User/{userId}", s.jf(s.jfSessionStub), "POST", "DELETE")
+	mux.Handle("POST /Sessions/{sessionId}/Viewing", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Sessions/Viewing", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Sessions/Capabilities", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Sessions/Capabilities/Full", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Sessions/Playing", s.jf(s.jfReportPlayback))
+	mux.Handle("POST /Sessions/Playing/Progress", s.jf(s.jfReportPlayback))
+	mux.Handle("POST /Sessions/Playing/Stopped", s.jf(s.jfReportPlaybackStopped))
+	mux.Handle("POST /Sessions/Playing/Ping", s.jf(s.jfSessionStub))
 	if s.jfVersionAtLeast(10, 11) {
-		jfAuth.HandleFunc("/Sessions/Playing/ReportStart", s.jfReportPlayback).Methods("POST")
-		jfAuth.HandleFunc("/Sessions/Playing/ReportProgress", s.jfReportPlayback).Methods("POST")
-		jfAuth.HandleFunc("/Sessions/Playing/ReportStopped", s.jfReportPlaybackStopped).Methods("POST")
-		jfAuth.HandleFunc("/Sessions/Logout", s.jfSessionStub).Methods("DELETE", "POST")
+		mux.Handle("POST /Sessions/Playing/ReportStart", s.jf(s.jfReportPlayback))
+		mux.Handle("POST /Sessions/Playing/ReportProgress", s.jf(s.jfReportPlayback))
+		mux.Handle("POST /Sessions/Playing/ReportStopped", s.jf(s.jfReportPlaybackStopped))
+		route(mux, "/Sessions/Logout", s.jf(s.jfSessionStub), "DELETE", "POST")
 	}
 
-	// Client log stub (Moonfin sends crash reports here)
-	jfAuth.HandleFunc("/ClientLog/Document", s.jfSessionStub).Methods("POST")
+	// Client log stub
+	mux.Handle("POST /ClientLog/Document", s.jf(s.jfSessionStub))
 
 	// Resume
-	jfAuth.HandleFunc("/UserItems/Resume", s.jfGetResumeItems).Methods("GET")
+	mux.Handle("GET /UserItems/Resume", s.jf(s.jfGetResumeItems))
 
 	// User items state
-	jfAuth.HandleFunc("/UserItems/{itemId}/UserData", s.jfUserData).Methods("GET")
-	jfAuth.HandleFunc("/UserItems/{itemId}/UserData", s.jfUpdateUserData).Methods("POST")
-	jfAuth.HandleFunc("/Users/{userId}/Items/{itemId}/UserData", s.jfUserData).Methods("GET")
-	jfAuth.HandleFunc("/Users/{userId}/Items/{itemId}/UserData", s.jfUpdateUserData).Methods("POST")
-	jfAuth.HandleFunc("/UserItems/{itemId}/Rating", s.jfSessionStub).Methods("POST", "DELETE")
-	jfAuth.HandleFunc("/Users/{userId}/PlayedItems/{itemId}", s.jfTogglePlayed).Methods("POST", "DELETE")
-	jfAuth.HandleFunc("/Users/{userId}/FavoriteItems/{itemId}", s.jfToggleFavorite).Methods("POST", "DELETE")
-	jfAuth.HandleFunc("/UserPlayedItems/{itemId}", s.jfTogglePlayed).Methods("POST", "DELETE")
-	jfAuth.HandleFunc("/UserFavoriteItems/{itemId}", s.jfToggleFavorite).Methods("POST", "DELETE")
-	jfAuth.HandleFunc("/PlayingItems/{itemId}", s.jfReportPlayback).Methods("POST", "DELETE")
-	jfAuth.HandleFunc("/PlayingItems/{itemId}/Progress", s.jfReportPlayback).Methods("POST")
+	mux.Handle("GET /UserItems/{itemId}/UserData", s.jf(s.jfUserData))
+	mux.Handle("POST /UserItems/{itemId}/UserData", s.jf(s.jfUpdateUserData))
+	mux.Handle("GET /Users/{userId}/Items/{itemId}/UserData", s.jf(s.jfUserData))
+	mux.Handle("POST /Users/{userId}/Items/{itemId}/UserData", s.jf(s.jfUpdateUserData))
+	route(mux, "/UserItems/{itemId}/Rating", s.jf(s.jfSessionStub), "POST", "DELETE")
+	route(mux, "/Users/{userId}/PlayedItems/{itemId}", s.jf(s.jfTogglePlayed), "POST", "DELETE")
+	route(mux, "/Users/{userId}/FavoriteItems/{itemId}", s.jf(s.jfToggleFavorite), "POST", "DELETE")
+	route(mux, "/UserPlayedItems/{itemId}", s.jf(s.jfTogglePlayed), "POST", "DELETE")
+	route(mux, "/UserFavoriteItems/{itemId}", s.jf(s.jfToggleFavorite), "POST", "DELETE")
+	route(mux, "/PlayingItems/{itemId}", s.jf(s.jfReportPlayback), "POST", "DELETE")
+	mux.Handle("POST /PlayingItems/{itemId}/Progress", s.jf(s.jfReportPlayback))
 
 	// Search
-	jfAuth.HandleFunc("/Search/Hints", s.jfSearchHints).Methods("GET")
+	mux.Handle("GET /Search/Hints", s.jf(s.jfSearchHints))
 
 	// Genres, Persons, Studios
-	jfAuth.HandleFunc("/Genres", s.jfGetGenres).Methods("GET")
-	jfAuth.HandleFunc("/Genres/{genreName}", s.jfNamedStubItem).Methods("GET")
-	jfAuth.HandleFunc("/Genres/{name}/Images/{imageType}", s.jfNotFound).Methods("GET", "HEAD")
-	jfAuth.HandleFunc("/Genres/{name}/Images/{imageType}/{imageIndex}", s.jfNotFound).Methods("GET", "HEAD")
-	jfAuth.HandleFunc("/Persons", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Persons/{name}", s.jfNamedStubItem).Methods("GET")
-	jfAuth.HandleFunc("/Persons/{name}/Images/{imageType}", s.jfNotFound).Methods("GET", "HEAD")
-	jfAuth.HandleFunc("/Persons/{name}/Images/{imageType}/{imageIndex}", s.jfNotFound).Methods("GET", "HEAD")
-	jfAuth.HandleFunc("/Studios", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Studios/{name}", s.jfNamedStubItem).Methods("GET")
-	jfAuth.HandleFunc("/Studios/{name}/Images/{imageType}", s.jfNotFound).Methods("GET", "HEAD")
-	jfAuth.HandleFunc("/Studios/{name}/Images/{imageType}/{imageIndex}", s.jfNotFound).Methods("GET", "HEAD")
-	jfAuth.HandleFunc("/Artists", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Artists/InstantMix", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Artists/AlbumArtists", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Artists/{itemId}/InstantMix", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Artists/{itemId}/Similar", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Artists/{name}/Images/{imageType}/{imageIndex}", s.jfNotFound).Methods("GET", "HEAD")
-	jfAuth.HandleFunc("/Artists/{name}", s.jfNamedStubItem).Methods("GET")
+	mux.Handle("GET /Genres", s.jf(s.jfGetGenres))
+	mux.Handle("GET /Genres/{genreName}", s.jf(s.jfNamedStubItem))
+	route(mux, "/Genres/{name}/Images/{imageType}", s.jf(s.jfNotFound), "GET", "HEAD")
+	route(mux, "/Genres/{name}/Images/{imageType}/{imageIndex}", s.jf(s.jfNotFound), "GET", "HEAD")
+	mux.Handle("GET /Persons", s.jf(s.jfEmptyItems))
+	mux.Handle("GET /Persons/{name}", s.jf(s.jfNamedStubItem))
+	route(mux, "/Persons/{name}/Images/{imageType}", s.jf(s.jfNotFound), "GET", "HEAD")
+	route(mux, "/Persons/{name}/Images/{imageType}/{imageIndex}", s.jf(s.jfNotFound), "GET", "HEAD")
+	mux.Handle("GET /Studios", s.jf(s.jfEmptyItems))
+	mux.Handle("GET /Studios/{name}", s.jf(s.jfNamedStubItem))
+	route(mux, "/Studios/{name}/Images/{imageType}", s.jf(s.jfNotFound), "GET", "HEAD")
+	route(mux, "/Studios/{name}/Images/{imageType}/{imageIndex}", s.jf(s.jfNotFound), "GET", "HEAD")
+	mux.Handle("GET /Artists", s.jf(s.jfEmptyItems))
+	mux.Handle("GET /Artists/InstantMix", s.jf(s.jfEmptyItems))
+	mux.Handle("GET /Artists/AlbumArtists", s.jf(s.jfEmptyItems))
+	mux.Handle("GET /Artists/{itemId}/InstantMix", s.jf(s.jfEmptyItems))
+	mux.Handle("GET /Artists/{itemId}/Similar", s.jf(s.jfEmptyItems))
+	route(mux, "/Artists/{name}/Images/{imageType}/{imageIndex}", s.jf(s.jfNotFound), "GET", "HEAD")
+	mux.Handle("GET /Artists/{name}", s.jf(s.jfNamedStubItem))
 
 	// Media segments (skip intro/credits)
-	jfAuth.HandleFunc("/MediaSegments/{itemId}", s.jfMediaSegments).Methods("GET")
+	mux.Handle("GET /MediaSegments/{itemId}", s.jf(s.jfMediaSegments))
 
 	// Cancel active transcoding
-	jfAuth.HandleFunc("/Videos/ActiveEncodings", s.jfSessionStub).Methods("DELETE")
+	mux.Handle("DELETE /Videos/ActiveEncodings", s.jf(s.jfSessionStub))
 
 	// Display preferences stub
-	jfAuth.HandleFunc("/DisplayPreferences/{displayPrefsId}", s.jfDisplayPrefsStub).Methods("GET")
-	jfAuth.HandleFunc("/DisplayPreferences/{displayPrefsId}", s.jfSessionStub).Methods("POST")
+	mux.Handle("GET /DisplayPreferences/{displayPrefsId}", s.jf(s.jfDisplayPrefsStub))
+	mux.Handle("POST /DisplayPreferences/{displayPrefsId}", s.jf(s.jfSessionStub))
 
-	// LiveTv: channels are served from the M3U/IPTV channel store (ADR-015).
-	// EPG (Programs/Guide) and DVR remain unimplemented — empty stubs.
-	// Registered only when a content_type: "tv" library exists; otherwise the
-	// whole subsystem stays off and these paths 404 (feature absent).
+	// LiveTv
 	if s.hasTVLibraries() {
-		jfAuth.HandleFunc("/LiveTv/Info", s.jfLiveTVInfo).Methods("GET")
-		jfAuth.HandleFunc("/LiveTv/Channels", s.jfLiveTvChannels).Methods("GET")
-		jfAuth.HandleFunc("/LiveTv/Channels/{channelId}", s.jfLiveTvChannel).Methods("GET")
-		jfAuth.HandleFunc("/LiveTv/Programs/Recommended", s.jfEmptyItems).Methods("GET")
-		jfAuth.HandleFunc("/LiveTv/Programs", s.jfEmptyItems).Methods("GET", "POST")
-		jfAuth.HandleFunc("/LiveTv/GuideInfo", s.jfEmptyObject).Methods("GET")
-		jfAuth.HandleFunc("/LiveStreams/Open", s.jfOpenLiveStream).Methods("POST")
-		jfAuth.HandleFunc("/LiveStreams/Close", s.jfCloseLiveStream).Methods("POST")
+		mux.Handle("GET /LiveTv/Info", s.jf(s.jfLiveTVInfo))
+		mux.Handle("GET /LiveTv/Channels", s.jf(s.jfLiveTvChannels))
+		mux.Handle("GET /LiveTv/Channels/{channelId}", s.jf(s.jfLiveTvChannel))
+		mux.Handle("GET /LiveTv/Programs/Recommended", s.jf(s.jfEmptyItems))
+		route(mux, "/LiveTv/Programs", s.jf(s.jfEmptyItems), "GET", "POST")
+		mux.Handle("GET /LiveTv/GuideInfo", s.jf(s.jfEmptyObject))
+		mux.Handle("POST /LiveStreams/Open", s.jf(s.jfOpenLiveStream))
+		mux.Handle("POST /LiveStreams/Close", s.jf(s.jfCloseLiveStream))
 	}
 
-	// Lightweight compatibility stubs used by several official and third-party clients at startup.
-	jfAuth.HandleFunc("/Plugins", s.jfEmptyArray).Methods("GET")
-	jfAuth.HandleFunc("/Packages", s.jfEmptyArray).Methods("GET")
-	jfAuth.HandleFunc("/ScheduledTasks", s.jfScheduledTasks).Methods("GET")
-	jfAuth.HandleFunc("/Devices", s.jfDevices).Methods("GET")
-	jfAuth.HandleFunc("/Devices", s.jfSessionStub).Methods("DELETE")
-	jfAuth.HandleFunc("/Devices/Info", s.jfDeviceInfo).Methods("GET")
-	jfAuth.HandleFunc("/Devices/Options", s.jfDeviceOptions).Methods("GET")
-	jfAuth.HandleFunc("/Devices/Options", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Library/MediaFolders", s.jfGetViews).Methods("GET")
-	jfAuth.HandleFunc("/Library/VirtualFolders", s.jfVirtualFolders).Methods("GET")
-	jfAuth.HandleFunc("/Library/PhysicalPaths", s.jfPhysicalPaths).Methods("GET")
-	jfAuth.HandleFunc("/Localization/Countries", s.jfLocalizationCountries).Methods("GET")
-	jfAuth.HandleFunc("/Localization/Cultures", s.jfLocalizationCultures).Methods("GET")
-	jfAuth.HandleFunc("/Localization/Options", s.jfLocalizationOptions).Methods("GET")
-	jfAuth.HandleFunc("/Localization/ParentalRatings", s.jfEmptyArray).Methods("GET")
-	jfAuth.HandleFunc("/Auth/Providers", s.jfAuthProviders).Methods("GET")
-	jfAuth.HandleFunc("/Auth/PasswordResetProviders", s.jfPasswordResetProviders).Methods("GET")
-	jfAuth.HandleFunc("/Auth/Keys", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Auth/Keys", s.jfAuthKey).Methods("POST")
-	jfAuth.HandleFunc("/Auth/Keys/{key}", s.jfSessionStub).Methods("DELETE")
-	jfAuth.HandleFunc("/Startup/Complete", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Startup/Configuration", s.jfStartupConfiguration).Methods("GET")
-	jfAuth.HandleFunc("/Startup/Configuration", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Startup/FirstUser", s.jfStartupUser).Methods("GET")
-	jfAuth.HandleFunc("/Startup/RemoteAccess", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Startup/User", s.jfStartupUser).Methods("GET")
-	jfAuth.HandleFunc("/Startup/User", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Library/Media/Updated", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Library/Movies/Added", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Library/Movies/Updated", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Library/Series/Added", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Library/Series/Updated", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Library/Refresh", s.jfRefreshLibrary).Methods("POST")
-	jfAuth.HandleFunc("/Library/VirtualFolders", s.jfSessionStub).Methods("POST", "DELETE")
-	jfAuth.HandleFunc("/Library/VirtualFolders/LibraryOptions", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Library/VirtualFolders/Name", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Library/VirtualFolders/Paths", s.jfSessionStub).Methods("POST", "DELETE")
-	jfAuth.HandleFunc("/Library/VirtualFolders/Paths/Update", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/ScheduledTasks/{taskId}", s.jfScheduledTask).Methods("GET")
-	jfAuth.HandleFunc("/ScheduledTasks/{taskId}/Triggers", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/ScheduledTasks/Running/{taskId}", s.jfRunScheduledTask).Methods("POST")
-	jfAuth.HandleFunc("/ScheduledTasks/Running/{taskId}", s.jfSessionStub).Methods("DELETE")
-	jfAuth.HandleFunc("/Packages/{name}", s.jfPackageInfo).Methods("GET")
-	jfAuth.HandleFunc("/Packages/Installed/{name}", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Packages/Installing/{packageId}", s.jfSessionStub).Methods("DELETE")
-	jfAuth.HandleFunc("/Plugins/{pluginId}", s.jfSessionStub).Methods("DELETE")
-	jfAuth.HandleFunc("/Plugins/{pluginId}/{version}", s.jfSessionStub).Methods("DELETE")
-	jfAuth.HandleFunc("/Plugins/{pluginId}/{version}/Disable", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Plugins/{pluginId}/{version}/Enable", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Plugins/{pluginId}/{version}/Image", s.jfNotFound).Methods("GET")
-	jfAuth.HandleFunc("/Plugins/{pluginId}/Configuration", s.jfEmptyObject).Methods("GET")
-	jfAuth.HandleFunc("/Plugins/{pluginId}/Configuration", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Plugins/{pluginId}/Manifest", s.jfSessionStub).Methods("POST")
+	// Compatibility stubs
+	mux.Handle("GET /Plugins", s.jf(s.jfEmptyArray))
+	mux.Handle("GET /Packages", s.jf(s.jfEmptyArray))
+	mux.Handle("GET /ScheduledTasks", s.jf(s.jfScheduledTasks))
+	mux.Handle("GET /Devices", s.jf(s.jfDevices))
+	mux.Handle("DELETE /Devices", s.jf(s.jfSessionStub))
+	mux.Handle("GET /Devices/Info", s.jf(s.jfDeviceInfo))
+	mux.Handle("GET /Devices/Options", s.jf(s.jfDeviceOptions))
+	mux.Handle("POST /Devices/Options", s.jf(s.jfSessionStub))
+	mux.Handle("GET /Library/MediaFolders", s.jf(s.jfGetViews))
+	mux.Handle("GET /Library/VirtualFolders", s.jf(s.jfVirtualFolders))
+	mux.Handle("GET /Library/PhysicalPaths", s.jf(s.jfPhysicalPaths))
+	mux.Handle("GET /Localization/Countries", s.jf(s.jfLocalizationCountries))
+	mux.Handle("GET /Localization/Cultures", s.jf(s.jfLocalizationCultures))
+	mux.Handle("GET /Localization/Options", s.jf(s.jfLocalizationOptions))
+	mux.Handle("GET /Localization/ParentalRatings", s.jf(s.jfEmptyArray))
+	mux.Handle("GET /Auth/Providers", s.jf(s.jfAuthProviders))
+	mux.Handle("GET /Auth/PasswordResetProviders", s.jf(s.jfPasswordResetProviders))
+	mux.Handle("GET /Auth/Keys", s.jf(s.jfEmptyItems))
+	mux.Handle("POST /Auth/Keys", s.jf(s.jfAuthKey))
+	mux.Handle("DELETE /Auth/Keys/{key}", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Startup/Complete", s.jf(s.jfSessionStub))
+	mux.Handle("GET /Startup/Configuration", s.jf(s.jfStartupConfiguration))
+	mux.Handle("POST /Startup/Configuration", s.jf(s.jfSessionStub))
+	mux.Handle("GET /Startup/FirstUser", s.jf(s.jfStartupUser))
+	mux.Handle("POST /Startup/RemoteAccess", s.jf(s.jfSessionStub))
+	mux.Handle("GET /Startup/User", s.jf(s.jfStartupUser))
+	mux.Handle("POST /Startup/User", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Library/Media/Updated", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Library/Movies/Added", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Library/Movies/Updated", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Library/Series/Added", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Library/Series/Updated", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Library/Refresh", s.jf(s.jfRefreshLibrary))
+	route(mux, "/Library/VirtualFolders", s.jf(s.jfSessionStub), "POST", "DELETE")
+	mux.Handle("POST /Library/VirtualFolders/LibraryOptions", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Library/VirtualFolders/Name", s.jf(s.jfSessionStub))
+	route(mux, "/Library/VirtualFolders/Paths", s.jf(s.jfSessionStub), "POST", "DELETE")
+	mux.Handle("POST /Library/VirtualFolders/Paths/Update", s.jf(s.jfSessionStub))
+	mux.Handle("GET /ScheduledTasks/{taskId}", s.jf(s.jfScheduledTask))
+	mux.Handle("POST /ScheduledTasks/{taskId}/Triggers", s.jf(s.jfSessionStub))
+	mux.Handle("POST /ScheduledTasks/Running/{taskId}", s.jf(s.jfRunScheduledTask))
+	mux.Handle("DELETE /ScheduledTasks/Running/{taskId}", s.jf(s.jfSessionStub))
+	mux.Handle("GET /Packages/{name}", s.jf(s.jfPackageInfo))
+	mux.Handle("POST /Packages/Installed/{name}", s.jf(s.jfSessionStub))
+	mux.Handle("DELETE /Packages/Installing/{packageId}", s.jf(s.jfSessionStub))
+	mux.Handle("DELETE /Plugins/{pluginId}", s.jf(s.jfSessionStub))
+	mux.Handle("DELETE /Plugins/{pluginId}/{version}", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Plugins/{pluginId}/{version}/Disable", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Plugins/{pluginId}/{version}/Enable", s.jf(s.jfSessionStub))
+	mux.Handle("GET /Plugins/{pluginId}/{version}/Image", s.jf(s.jfNotFound))
+	mux.Handle("GET /Plugins/{pluginId}/Configuration", s.jf(s.jfEmptyObject))
+	mux.Handle("POST /Plugins/{pluginId}/Configuration", s.jf(s.jfSessionStub))
+	mux.Handle("POST /Plugins/{pluginId}/Manifest", s.jf(s.jfSessionStub))
 
 	// Kodi SyncQueue plugin emulation (optional)
 	if s.config.App.KodiSyncQueue {
-		jf.HandleFunc("/Jellyfin.Plugin.KodiSyncQueue/GetPluginSettings", s.jfKodiSyncSettings).Methods("GET")
-		jfAuth.HandleFunc("/Jellyfin.Plugin.KodiSyncQueue/{userId}/GetItems", s.jfKodiSyncGetItems).Methods("GET")
+		mux.Handle("GET /Jellyfin.Plugin.KodiSyncQueue/GetPluginSettings", http.HandlerFunc(s.jfKodiSyncSettings))
+		mux.Handle("GET /Jellyfin.Plugin.KodiSyncQueue/{userId}/GetItems", s.jf(s.jfKodiSyncGetItems))
 	}
 
-	// WebSocket stub (Jellyfin clients poll this constantly)
-	s.router.HandleFunc("/socket", func(w http.ResponseWriter, r *http.Request) {
+	// WebSocket stub
+	mux.HandleFunc("/socket", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// Web UI static files
+	// Web UI static files (Jellyfin web path)
 	if s.config.App.UIEnabled {
-		s.router.PathPrefix("/web/").Handler(http.StripPrefix("/web/", http.FileServer(http.Dir("web"))))
+		mux.Handle("/web/{path...}", http.StripPrefix("/web/", http.FileServer(http.Dir("web"))))
 	}
 
 	// Catch-all for unhandled routes
-	s.router.NotFoundHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/{rest...}", func(w http.ResponseWriter, r *http.Request) {
 		if s.config.App.Debug {
 			log.Printf("[UNHANDLED] %s %s", r.Method, r.URL.String())
 		}
@@ -438,10 +441,6 @@ func (s *Server) jfVersionAtLeast(major, minor int) bool {
 }
 
 // hasTVLibraries reports whether any content_type: "tv" library is configured.
-// When false, the entire Live TV / IPTV subsystem stays dormant: no channel
-// store is populated, no refresh job runs, and the /LiveTv and /tv/logo routes
-// are never registered. This keeps the feature truly off (matching ADR-005's
-// default) rather than carrying its handlers and an empty store for nothing.
 func (s *Server) hasTVLibraries() bool {
 	for _, lib := range s.config.Libraries {
 		if lib.ContentType == "tv" {
@@ -452,9 +451,6 @@ func (s *Server) hasTVLibraries() bool {
 }
 
 func (s *Server) Start() error {
-	// Boot population is NOT pushed to the Kodi sync queue.
-	// Kodi sees an empty queue on first connect and performs a full scan (default).
-	// Only subsequent rescans record deltas for incremental sync.
 	added, _ := media.PopulateIDStore(s.config.Libraries)
 	log.Printf("Item ID store populated for %d libraries (%d items registered)", len(s.config.Libraries), len(added))
 	s.refreshTVChannels()
@@ -467,7 +463,6 @@ func (s *Server) Start() error {
 }
 
 // runBootScan triggers an auto-scan in the background on startup if enabled.
-// Runs in a goroutine to avoid delaying the HTTP listener.
 func (s *Server) runBootScan() {
 	if !s.config.Crawlers.AutoScan.Enabled {
 		return

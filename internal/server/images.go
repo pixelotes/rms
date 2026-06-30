@@ -3,13 +3,12 @@ package server
 import (
 	"net/http"
 
-	"github.com/gorilla/mux"
 
 	"raspberry-media-server/internal/media"
 )
 
 func (s *Server) handleImage(w http.ResponseWriter, r *http.Request) {
-	imageID := mux.Vars(r)["imageId"]
+	imageID := r.PathValue("imageId")
 
 	filePath, err := media.ItemPath(imageID)
 	if err != nil {

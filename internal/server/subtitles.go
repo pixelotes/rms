@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorilla/mux"
 
 	"raspberry-media-server/internal/crawlers/subtitles"
 	"raspberry-media-server/internal/media"
@@ -144,7 +143,7 @@ func (s *Server) handleDownloadSubtitle(w http.ResponseWriter, r *http.Request) 
 // allowed libraries. Returns the resolved absolute path or false if a response
 // was already written.
 func (s *Server) authorizeSubtitlePath(w http.ResponseWriter, r *http.Request) (string, bool) {
-	filePath := mux.Vars(r)["filePath"]
+	filePath := r.PathValue("filePath")
 	if decoded, err := media.ItemPath(filePath); err == nil && strings.Contains(decoded, "/") {
 		filePath = decoded
 	}

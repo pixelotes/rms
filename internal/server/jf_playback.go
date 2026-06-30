@@ -9,14 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorilla/mux"
 
 	"raspberry-media-server/internal/media"
 	"raspberry-media-server/internal/tv"
 )
 
 func (s *Server) jfPlaybackInfo(w http.ResponseWriter, r *http.Request) {
-	itemID := mux.Vars(r)["itemId"]
+	itemID := r.PathValue("itemId")
 
 	// TV channel: return its HLS MediaSource (infinite, non-seekable).
 	if ch, ok := tv.LookupChannel(itemID); ok {
@@ -63,7 +62,7 @@ func (s *Server) jfPlaybackInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) jfVideoStream(w http.ResponseWriter, r *http.Request) {
-	itemID := mux.Vars(r)["itemId"]
+	itemID := r.PathValue("itemId")
 
 	// TV channel: redirect to the upstream HLS stream.
 	if ch, ok := tv.LookupChannel(itemID); ok {
@@ -102,10 +101,9 @@ func (s *Server) jfVideoStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) jfSubtitleStream(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	itemID := vars["itemId"]
-	subtitleIndex, _ := strconv.Atoi(vars["index"])
-	format := vars["format"]
+	itemID := r.PathValue("itemId")
+	subtitleIndex, _ := strconv.Atoi(r.PathValue("index"))
+	format := r.PathValue("format")
 
 	path, err := media.ItemPath(itemID)
 	if err != nil {

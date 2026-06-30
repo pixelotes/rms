@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/gorilla/mux"
 
 	"raspberry-media-server/internal/config"
 	"raspberry-media-server/internal/tv"
@@ -58,7 +57,7 @@ func (s *Server) jfLiveTvChannels(w http.ResponseWriter, r *http.Request) {
 
 // jfLiveTvChannel handles GET /LiveTv/Channels/{channelId}.
 func (s *Server) jfLiveTvChannel(w http.ResponseWriter, r *http.Request) {
-	id := mux.Vars(r)["channelId"]
+	id := r.PathValue("channelId")
 	ch, ok := tv.LookupChannel(id)
 	if !ok || !s.tvLibraryVisible(ch.LibKey, r) {
 		respondError(w, http.StatusNotFound, "Channel not found")

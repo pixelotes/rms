@@ -7,13 +7,12 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gorilla/mux"
 
 	"raspberry-media-server/internal/media"
 )
 
 func (s *Server) jfGetSeasons(w http.ResponseWriter, r *http.Request) {
-	showID := mux.Vars(r)["showId"]
+	showID := r.PathValue("showId")
 
 	showPath, err := media.ItemPath(showID)
 	if err != nil {
@@ -91,7 +90,7 @@ func (s *Server) jfGetSeasons(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) jfGetEpisodes(w http.ResponseWriter, r *http.Request) {
-	showID := mux.Vars(r)["showId"]
+	showID := r.PathValue("showId")
 	seasonID := queryParam(r, "seasonId", "SeasonId")
 	parentID := queryParam(r, "parentId", "ParentId")
 

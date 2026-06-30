@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorilla/mux"
 
 	"raspberry-media-server/internal/config"
 	"raspberry-media-server/internal/media"
@@ -153,7 +152,7 @@ func (s *Server) handleTVStream(w http.ResponseWriter, r *http.Request, channelI
 // handleTVLogo proxies a channel's remote logo so the WebUI can load it without
 // hitting cross-origin restrictions.
 func (s *Server) handleTVLogo(w http.ResponseWriter, r *http.Request) {
-	channelID := mux.Vars(r)["channelId"]
+	channelID := r.PathValue("channelId")
 	ch, ok := tv.LookupChannel(channelID)
 	if !ok || ch.Logo == "" {
 		http.NotFound(w, r)

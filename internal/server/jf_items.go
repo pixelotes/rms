@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gorilla/mux"
 
 	"raspberry-media-server/internal/media"
 	"raspberry-media-server/internal/tv"
@@ -174,7 +173,7 @@ func (s *Server) jfGetItems(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) jfGetItem(w http.ResponseWriter, r *http.Request) {
 	libs := s.librariesForRequest(r)
-	itemID := mux.Vars(r)["itemId"]
+	itemID := r.PathValue("itemId")
 
 	if idx, ok := s.parseLibraryID(itemID, libs); ok {
 		lib := libs[idx]
@@ -235,7 +234,7 @@ func (s *Server) jfGetItem(w http.ResponseWriter, r *http.Request) {
 // Series → Season → Episode hierarchies.
 func (s *Server) jfGetAncestors(w http.ResponseWriter, r *http.Request) {
 	libs := s.librariesForRequest(r)
-	itemID := mux.Vars(r)["itemId"]
+	itemID := r.PathValue("itemId")
 
 	path, err := media.ItemPath(itemID)
 	if err != nil {
@@ -284,9 +283,8 @@ func (s *Server) jfGetAncestors(w http.ResponseWriter, r *http.Request) {
 // --- Images ---
 
 func (s *Server) jfGetItemImage(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	itemID := vars["itemId"]
-	imageType := vars["imageType"]
+	itemID := r.PathValue("itemId")
+	imageType := r.PathValue("imageType")
 
 	// TV channel logo: redirect to the upstream image (clients load images via
 	// <img>, so cross-origin is fine — no proxy needed here).

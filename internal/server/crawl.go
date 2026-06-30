@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/gorilla/mux"
 
 	"raspberry-media-server/internal/media"
 )
@@ -16,7 +15,7 @@ type crawlRequest struct {
 }
 
 func (s *Server) handleDuration(w http.ResponseWriter, r *http.Request) {
-	filePath := mux.Vars(r)["filePath"]
+	filePath := r.PathValue("filePath")
 	if decoded, err := media.ItemPath(filePath); err == nil && strings.Contains(decoded, "/") {
 		filePath = decoded
 	}

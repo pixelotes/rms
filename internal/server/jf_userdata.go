@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorilla/mux"
 
 	"raspberry-media-server/internal/media"
 )
@@ -254,7 +253,7 @@ func (s *Server) jfReportPlayback(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 	if req.ItemId == "" {
-		req.ItemId = mux.Vars(r)["itemId"]
+		req.ItemId = r.PathValue("itemId")
 	}
 	if req.ItemId != "" {
 		userID := stableUserID(usernameFromContext(r))
@@ -277,7 +276,7 @@ func (s *Server) jfReportPlaybackStopped(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) jfTogglePlayed(w http.ResponseWriter, r *http.Request) {
-	itemID := mux.Vars(r)["itemId"]
+	itemID := r.PathValue("itemId")
 	userID := stableUserID(usernameFromContext(r))
 	played := r.Method == "POST"
 	s.userData.SetPlayed(userID, itemID, played)
@@ -285,7 +284,7 @@ func (s *Server) jfTogglePlayed(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) jfToggleFavorite(w http.ResponseWriter, r *http.Request) {
-	itemID := mux.Vars(r)["itemId"]
+	itemID := r.PathValue("itemId")
 	userID := stableUserID(usernameFromContext(r))
 	favorite := r.Method == "POST"
 	s.userData.SetFavorite(userID, itemID, favorite)
@@ -293,7 +292,7 @@ func (s *Server) jfToggleFavorite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) jfUpdateUserData(w http.ResponseWriter, r *http.Request) {
-	itemID := mux.Vars(r)["itemId"]
+	itemID := r.PathValue("itemId")
 	userID := stableUserID(usernameFromContext(r))
 
 	var req struct {
@@ -314,7 +313,7 @@ func (s *Server) jfUpdateUserData(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) jfUserData(w http.ResponseWriter, r *http.Request) {
-	itemID := mux.Vars(r)["itemId"]
+	itemID := r.PathValue("itemId")
 	userID := stableUserID(usernameFromContext(r))
 	respondJSON(w, http.StatusOK, s.userData.Get(userID, itemID))
 }

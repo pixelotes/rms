@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gorilla/mux"
 
 	"raspberry-media-server/internal/media"
 )
@@ -47,7 +46,7 @@ func (s *Server) jfSystemConfiguration(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) jfSystemConfigurationValue(w http.ResponseWriter, r *http.Request) {
-	key := mux.Vars(r)["key"]
+	key := r.PathValue("key")
 	switch key {
 	case "branding":
 		s.jfBrandingConfig(w, r)
@@ -175,7 +174,7 @@ func (s *Server) jfItemCounts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) jfItemImages(w http.ResponseWriter, r *http.Request) {
-	itemID := mux.Vars(r)["itemId"]
+	itemID := r.PathValue("itemId")
 	images := make([]map[string]interface{}, 0, 2)
 	addImage := func(imageType, tag string) {
 		images = append(images, map[string]interface{}{
@@ -216,7 +215,7 @@ func (s *Server) jfItemImages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) jfMetadataEditor(w http.ResponseWriter, r *http.Request) {
-	itemID := mux.Vars(r)["itemId"]
+	itemID := r.PathValue("itemId")
 	item := map[string]interface{}{"Id": itemID}
 	libs := s.librariesForRequest(r)
 	if idx, ok := s.parseLibraryID(itemID, libs); ok {
@@ -254,10 +253,9 @@ func externalIDInfoList() []map[string]interface{} {
 }
 
 func (s *Server) jfNamedStubItem(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	name := vars["name"]
+	name := r.PathValue("name")
 	if name == "" {
-		name = vars["genreName"]
+		name = r.PathValue("genreName")
 	}
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"Name": name,
@@ -266,7 +264,7 @@ func (s *Server) jfNamedStubItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) jfSimilarItems(w http.ResponseWriter, r *http.Request) {
-	itemID := mux.Vars(r)["itemId"]
+	itemID := r.PathValue("itemId")
 	libs := s.librariesForRequest(r)
 	path, err := media.ItemPath(itemID)
 	if err != nil || !media.IsPathAllowed(path, libs) {
@@ -544,7 +542,7 @@ func (s *Server) jfStartupUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) jfScheduledTask(w http.ResponseWriter, r *http.Request) {
-	taskID := mux.Vars(r)["taskId"]
+	taskID := r.PathValue("taskId")
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"Id":                        taskID,
 		"Name":                      taskID,
@@ -575,7 +573,7 @@ func (s *Server) scheduledTaskDTO(id, name string) map[string]interface{} {
 }
 
 func (s *Server) jfRunScheduledTask(w http.ResponseWriter, r *http.Request) {
-	taskID := mux.Vars(r)["taskId"]
+	taskID := r.PathValue("taskId")
 	if strings.EqualFold(taskID, "ScanLibrary") || strings.EqualFold(taskID, "RefreshLibrary") {
 		s.rescanLibraries()
 	}
@@ -588,7 +586,7 @@ func (s *Server) jfRefreshLibrary(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) jfPackageInfo(w http.ResponseWriter, r *http.Request) {
-	name := mux.Vars(r)["name"]
+	name := r.PathValue("name")
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"Name":        name,
 		"Description": "",
