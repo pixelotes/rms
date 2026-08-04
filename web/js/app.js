@@ -184,7 +184,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const el = document.getElementById(`icon-${item.path.replace(/[^a-zA-Z0-9]/g, '-')}`);
             if (!el) return;
             fetchWithAuth(src).then(r => r.blob()).then(b => {
-                el.innerHTML = `<img src="${URL.createObjectURL(b)}">`;
+                el.innerHTML = `<img src="${URL.createObjectURL(b)}" loading="lazy">`;
             }).catch(() => {});
         });
     }
@@ -1007,4 +1007,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Boot: try cookie-based auto-login, otherwise show login screen
     tryAutoLogin();
+
+// Register Service Worker for offline caching
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').then(r=> console.log('SW registered', r)).catch(e=> console.error('SW registration failed', e));
+}
 });
