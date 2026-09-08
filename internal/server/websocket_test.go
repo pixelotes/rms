@@ -65,8 +65,18 @@ func TestJellyfinWebSocket(t *testing.T) {
 		t.Errorf("want KeepAlive reply, got %v", ka)
 	}
 
-	// Subscriptions are accepted silently.
+	// SessionsStart subscribes to periodic Sessions snapshots; SessionsStop ends them.
 	if err := conn.WriteJSON(map[string]interface{}{"MessageType": "SessionsStart", "Data": "0,1500"}); err != nil {
+		t.Fatal(err)
+	}
+	if sm := readWS(t, spec, conn, "SessionsMessage"); sm["MessageType"] != "Sessions" {
+		t.Errorf("want Sessions snapshot, got %v", sm["MessageType"])
+	}
+	if err := conn.WriteJSON(map[string]interface{}{"MessageType": "SessionsStop"}); err != nil {
+		t.Fatal(err)
+	}
+	// Other subscriptions are accepted silently.
+	if err := conn.WriteJSON(map[string]interface{}{"MessageType": "ActivityLogEntryStart", "Data": "0,1500"}); err != nil {
 		t.Fatal(err)
 	}
 

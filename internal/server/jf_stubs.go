@@ -10,10 +10,6 @@ func (s *Server) jfSessionStub(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) jfSessionsStub(w http.ResponseWriter, r *http.Request) {
-	respondJSON(w, http.StatusOK, []interface{}{})
-}
-
 func (s *Server) jfMediaSegments(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{
 		"Items":            []interface{}{},

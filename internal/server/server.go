@@ -24,6 +24,7 @@ type Server struct {
 	handler     http.Handler // router wrapped with Jellyfin request-compat rewrites
 	routeIndex  map[int][]routeTemplate
 	wsHub       *wsHub // Jellyfin /socket connections
+	sessions    *sessionStore
 	userData    *UserDataStore
 	syncQueue   *SyncQueueStore
 	streamCache *streamCache
@@ -40,6 +41,7 @@ func New(cfg *config.Config) *Server {
 	s.syncQueue = NewSyncQueueStore()
 	s.streamCache = newStreamCache(cfg.App.CachePath, cfg.App.CacheMaxGB)
 	s.wsHub = newWSHub()
+	s.sessions = newSessionStore()
 	s.ffmpegSlots = make(chan struct{}, cfg.Player.MaxFFmpegProcesses)
 	s.router = mux.NewRouter()
 	if cfg.App.Debug {
@@ -272,18 +274,19 @@ func (s *Server) registerRoutes() {
 	jfAuth.HandleFunc("/Playback/BitrateTest", s.jfBitrateTest).Methods("GET")
 
 	// Sessions
-	jfAuth.HandleFunc("/Sessions", s.jfSessionsStub).Methods("GET")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/Command", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/Command/{command}", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/Message", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/Playing", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/Playing/{command}", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/System/{command}", s.jfSessionStub).Methods("POST")
+	jfAuth.HandleFunc("/Sessions", s.jfSessions).Methods("GET")
+	// Remote control: forwarded over the target session's WebSocket.
+	jfAuth.HandleFunc("/Sessions/{sessionId}/Command", s.jfSessionCommand).Methods("POST")
+	jfAuth.HandleFunc("/Sessions/{sessionId}/Command/{command}", s.jfSessionCommand).Methods("POST")
+	jfAuth.HandleFunc("/Sessions/{sessionId}/Message", s.jfSessionMessage).Methods("POST")
+	jfAuth.HandleFunc("/Sessions/{sessionId}/Playing", s.jfSessionPlay).Methods("POST")
+	jfAuth.HandleFunc("/Sessions/{sessionId}/Playing/{command}", s.jfSessionPlaystate).Methods("POST")
+	jfAuth.HandleFunc("/Sessions/{sessionId}/System/{command}", s.jfSessionCommand).Methods("POST")
 	jfAuth.HandleFunc("/Sessions/{sessionId}/User/{userId}", s.jfSessionStub).Methods("POST", "DELETE")
 	jfAuth.HandleFunc("/Sessions/{sessionId}/Viewing", s.jfSessionStub).Methods("POST")
 	jfAuth.HandleFunc("/Sessions/Viewing", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/Capabilities", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/Capabilities/Full", s.jfSessionStub).Methods("POST")
+	jfAuth.HandleFunc("/Sessions/Capabilities", s.jfSessionCapabilities).Methods("POST")
+	jfAuth.HandleFunc("/Sessions/Capabilities/Full", s.jfSessionCapabilities).Methods("POST")
 	jfAuth.HandleFunc("/Sessions/Playing", s.jfReportPlayback).Methods("POST")
 	jfAuth.HandleFunc("/Sessions/Playing/Progress", s.jfReportPlayback).Methods("POST")
 	jfAuth.HandleFunc("/Sessions/Playing/Stopped", s.jfReportPlaybackStopped).Methods("POST")
@@ -294,7 +297,7 @@ func (s *Server) registerRoutes() {
 		jfAuth.HandleFunc("/Sessions/Playing/ReportStart", s.jfReportPlayback).Methods("POST")
 		jfAuth.HandleFunc("/Sessions/Playing/ReportProgress", s.jfReportPlayback).Methods("POST")
 		jfAuth.HandleFunc("/Sessions/Playing/ReportStopped", s.jfReportPlaybackStopped).Methods("POST")
-		jfAuth.HandleFunc("/Sessions/Logout", s.jfSessionStub).Methods("DELETE", "POST")
+		jfAuth.HandleFunc("/Sessions/Logout", s.jfSessionLogout).Methods("DELETE", "POST")
 	}
 
 	// Client log stub (Moonfin sends crash reports here)

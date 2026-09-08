@@ -44,11 +44,14 @@ type wsHub struct {
 }
 
 type wsConn struct {
-	conn   *websocket.Conn
-	userID string
-	send   chan []byte
-	once   sync.Once
-	done   chan struct{}
+	srv          *Server
+	conn         *websocket.Conn
+	userID       string
+	session      *session
+	send         chan []byte
+	once         sync.Once
+	done         chan struct{}
+	stopSessions chan struct{} // closes the SessionsStart ticker, nil when idle
 }
 
 func newWSHub() *wsHub { return &wsHub{conns: map[*wsConn]struct{}{}} }
@@ -138,8 +141,12 @@ func (s *Server) handleSocket(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return // Upgrade already replied with an HTTP error
 	}
-	c := &wsConn{conn: conn, userID: stableUserID(username), send: make(chan []byte, 32), done: make(chan struct{})}
+	se := s.sessions.touch(r, username)
+	c := &wsConn{srv: s, conn: conn, userID: stableUserID(username), session: se, send: make(chan []byte, 32), done: make(chan struct{})}
 	s.wsHub.add(c)
+	s.sessions.mu.Lock()
+	se.ws = c
+	s.sessions.mu.Unlock()
 	s.logDebug("websocket: %s connected (%d open)", username, s.wsHub.count())
 
 	go c.writeLoop()
@@ -148,7 +155,55 @@ func (s *Server) handleSocket(w http.ResponseWriter, r *http.Request) {
 
 	s.wsHub.remove(c)
 	c.close()
+	s.sessions.mu.Lock()
+	if se.ws == c {
+		se.ws = nil
+		se.LastActivity = time.Now().UTC()
+	}
+	s.sessions.mu.Unlock()
 	s.logDebug("websocket: %s disconnected (%d open)", username, s.wsHub.count())
+}
+
+// startSessionsFeed answers a SessionsStart subscription ("initialDelay,interval"
+// in milliseconds) with periodic Sessions messages until SessionsStop or close.
+func (c *wsConn) startSessionsFeed(spec string) {
+	c.stopSessionsFeed()
+	delay, interval := 0*time.Millisecond, 1500*time.Millisecond
+	if a, b, ok := strings.Cut(spec, ","); ok {
+		if v, err := time.ParseDuration(strings.TrimSpace(a) + "ms"); err == nil {
+			delay = v
+		}
+		if v, err := time.ParseDuration(strings.TrimSpace(b) + "ms"); err == nil && v > 0 {
+			interval = v
+		}
+	}
+	stop := make(chan struct{})
+	c.stopSessions = stop
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-c.done:
+				return
+			case <-timer.C:
+			}
+			select {
+			case c.send <- encodeWS("Sessions", c.srv.sessionDTOs(c.srv.sessions.list())):
+			default:
+			}
+			timer.Reset(interval)
+		}
+	}()
+}
+
+func (c *wsConn) stopSessionsFeed() {
+	if c.stopSessions != nil {
+		close(c.stopSessions)
+		c.stopSessions = nil
+	}
 }
 
 func (c *wsConn) writeLoop() {
@@ -180,7 +235,8 @@ func (c *wsConn) readLoop() {
 		}
 		c.conn.SetReadDeadline(time.Now().Add(deadline))
 		var in struct {
-			MessageType string `json:"MessageType"`
+			MessageType string      `json:"MessageType"`
+			Data        interface{} `json:"Data"`
 		}
 		if json.Unmarshal(raw, &in) != nil {
 			continue
@@ -192,9 +248,14 @@ func (c *wsConn) readLoop() {
 			case <-c.done:
 				return
 			}
+		case "sessionsstart":
+			spec, _ := in.Data.(string)
+			c.startSessionsFeed(spec)
+		case "sessionsstop":
+			c.stopSessionsFeed()
 		default:
-			// SessionsStart/Stop, ActivityLogEntryStart/Stop,
-			// ScheduledTasksInfoStart/Stop: nothing to report.
+			// ActivityLogEntryStart/Stop, ScheduledTasksInfoStart/Stop:
+			// nothing to report.
 		}
 	}
 }

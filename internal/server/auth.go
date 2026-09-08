@@ -186,6 +186,7 @@ func (s *Server) jellyfinAuthMiddleware(next http.Handler) http.Handler {
 		}
 
 		ctx := context.WithValue(r.Context(), contextKeyUser, username)
+		ctx = context.WithValue(ctx, contextKeyDevice{}, s.sessions.touch(r, username))
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

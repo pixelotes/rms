@@ -254,32 +254,35 @@ func (store *UserDataStore) GetResumable(userID string) []resumableItem {
 // --- HTTP Handlers ---
 
 func (s *Server) jfReportPlayback(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		ItemId        string `json:"ItemId"`
-		PositionTicks int64  `json:"PositionTicks"`
-	}
+	var req playbackReport
 	json.NewDecoder(r.Body).Decode(&req)
 	if req.ItemId == "" {
 		req.ItemId = mux.Vars(r)["itemId"]
 	}
 	if req.ItemId != "" {
 		userID := stableUserID(usernameFromContext(r))
-		s.userData.SetPosition(userID, req.ItemId, req.PositionTicks)
+		if req.PositionTicks != nil {
+			s.userData.SetPosition(userID, req.ItemId, *req.PositionTicks)
+		}
+		s.updateSessionPlayback(r, req, false)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) jfReportPlaybackStopped(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		ItemId        string `json:"ItemId"`
-		PositionTicks int64  `json:"PositionTicks"`
-	}
+	var req playbackReport
 	json.NewDecoder(r.Body).Decode(&req)
+	if req.ItemId == "" {
+		req.ItemId = mux.Vars(r)["itemId"]
+	}
 	if req.ItemId != "" {
 		userID := stableUserID(usernameFromContext(r))
-		s.userData.SetPosition(userID, req.ItemId, req.PositionTicks)
+		if req.PositionTicks != nil {
+			s.userData.SetPosition(userID, req.ItemId, *req.PositionTicks)
+		}
 		s.notifyUserData(userID, req.ItemId) // Jellyfin notifies on stop, not on progress
 	}
+	s.updateSessionPlayback(r, req, true)
 	w.WriteHeader(http.StatusNoContent)
 }
 
