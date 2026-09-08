@@ -443,6 +443,19 @@ func TestJellyfinContract(t *testing.T) {
 					t.Errorf("legacy prefix %s: want 200, got %d", p, status)
 				}
 			}
+			{
+				req, _ := http.NewRequest("GET", c.base+"/Users/Me", nil)
+				req.Header.Set("X-Emby-Authorization", `MediaBrowser Client="legacy", Device="d", DeviceId="i", Version="1", Token="`+c.token+`"`)
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp.Body.Close()
+				if resp.StatusCode != 200 {
+					t.Errorf("X-Emby-Authorization token: want 200, got %d", resp.StatusCode)
+				}
+			}
+
 			// ---- item-level flows
 			all := c.call("GET", "/Items?recursive=true&userId="+uid, nil, 200)
 			byType := map[string]string{}

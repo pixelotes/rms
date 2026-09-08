@@ -152,16 +152,12 @@ func (s *Server) jellyfinAuthMiddleware(next http.Handler) http.Handler {
 			tokenStr = t
 		}
 
-		if tokenStr == "" {
-			auth := r.Header.Get("Authorization")
-			if strings.HasPrefix(auth, "MediaBrowser ") {
-				for _, part := range strings.Split(auth[len("MediaBrowser "):], ",") {
-					part = strings.TrimSpace(part)
-					if strings.HasPrefix(part, "Token=") {
-						tokenStr = strings.Trim(strings.TrimPrefix(part, "Token="), "\"")
-						break
-					}
-				}
+		// "Authorization: MediaBrowser ..., Token=..." is the current header;
+		// X-Emby-Authorization is its legacy name, still accepted by Jellyfin
+		// and still sent by older clients (Kodi addon, Yatse, jellyfin-web < 10.8).
+		for _, h := range []string{"Authorization", "X-Emby-Authorization"} {
+			if tokenStr == "" {
+				tokenStr = tokenFromMediaBrowserHeader(r.Header.Get(h))
 			}
 		}
 
@@ -210,6 +206,21 @@ func requestedUserID(r *http.Request) string {
 func sameGUID(a, b string) bool {
 	norm := func(s string) string { return strings.ToLower(strings.ReplaceAll(s, "-", "")) }
 	return norm(a) == norm(b)
+}
+
+// tokenFromMediaBrowserHeader extracts Token="..." from a
+// `MediaBrowser Client="x", Device="y", Token="z"` header value.
+func tokenFromMediaBrowserHeader(value string) string {
+	if len(value) < len("MediaBrowser ") || !strings.EqualFold(value[:len("MediaBrowser ")], "MediaBrowser ") {
+		return ""
+	}
+	for _, part := range strings.Split(value[len("MediaBrowser "):], ",") {
+		part = strings.TrimSpace(part)
+		if len(part) > 6 && strings.EqualFold(part[:6], "Token=") {
+			return strings.Trim(part[6:], "\"")
+		}
+	}
+	return ""
 }
 
 // parseToken validates a JWT and returns the username, or "" if invalid.
