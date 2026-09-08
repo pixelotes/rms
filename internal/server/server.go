@@ -22,6 +22,7 @@ type Server struct {
 	httpServer  *http.Server
 	router      *mux.Router
 	handler     http.Handler // router wrapped with Jellyfin request-compat rewrites
+	routeIndex  map[int][]routeTemplate
 	userData    *UserDataStore
 	syncQueue   *SyncQueueStore
 	streamCache *streamCache
@@ -43,6 +44,7 @@ func New(cfg *config.Config) *Server {
 		s.router.Use(loggingMiddleware)
 	}
 	s.registerRoutes()
+	s.buildRouteIndex()
 	s.handler = s.compatHandler(s.router)
 	s.httpServer = &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.App.Port),
@@ -109,7 +111,6 @@ func (s *Server) registerRoutes() {
 
 	// Jellyfin public endpoints
 	jf.HandleFunc("/System/Info/Public", s.jfSystemInfoPublic).Methods("GET")
-	jf.HandleFunc("/system/info/public", s.jfSystemInfoPublic).Methods("GET")
 	jf.HandleFunc("/Users/Public", s.jfUsersPublic).Methods("GET")
 	jf.HandleFunc("/Users/AuthenticateByName", s.jfAuthenticateByName).Methods("POST")
 	jf.HandleFunc("/Branding/Configuration", s.jfBrandingConfig).Methods("GET")
@@ -128,9 +129,6 @@ func (s *Server) registerRoutes() {
 	jf.HandleFunc("/Items/{itemId}/Images/{imageType}", s.jfGetItemImage).Methods("GET", "HEAD")
 	jf.HandleFunc("/Items/{itemId}/Images/{imageType}/{imageIndex}", s.jfGetItemImage).Methods("GET", "HEAD")
 	jf.HandleFunc("/Items/{itemId}/Images/{imageType}/{imageIndex}/{tag}/{format}/{maxWidth}/{maxHeight}/{percentPlayed}/{unplayedCount}", s.jfGetItemImage).Methods("GET", "HEAD")
-	jf.HandleFunc("/items/{itemId}/Images/{imageType}", s.jfGetItemImage).Methods("GET", "HEAD")
-	jf.HandleFunc("/items/{itemId}/Images/{imageType}/{imageIndex}", s.jfGetItemImage).Methods("GET", "HEAD")
-	jf.HandleFunc("/items/{itemId}/Images/{imageType}/{imageIndex}/{tag}/{format}/{maxWidth}/{maxHeight}/{percentPlayed}/{unplayedCount}", s.jfGetItemImage).Methods("GET", "HEAD")
 
 	// Streaming - public (media players like ExoPlayer/AVPlayer use bare URLs without auth headers)
 	jf.HandleFunc("/Videos/{itemId}/stream", s.jfVideoStream).Methods("GET", "HEAD")
@@ -145,9 +143,8 @@ func (s *Server) registerRoutes() {
 	jfAuth := s.router.PathPrefix("").Subrouter()
 	jfAuth.Use(s.jellyfinAuthMiddleware)
 
-	// System (register both cases — some clients use lowercase)
+	// System (any casing is accepted, see compatHandler)
 	jfAuth.HandleFunc("/System/Info", s.jfSystemInfo).Methods("GET")
-	jfAuth.HandleFunc("/system/info", s.jfSystemInfo).Methods("GET")
 	jfAuth.HandleFunc("/System/Endpoint", s.jfSystemEndpoint).Methods("GET")
 	jfAuth.HandleFunc("/System/Ping", s.jfSystemPing).Methods("GET", "POST")
 	jfAuth.HandleFunc("/System/ActivityLog/Entries", s.jfEmptyItems).Methods("GET")

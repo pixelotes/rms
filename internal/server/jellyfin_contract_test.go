@@ -456,6 +456,16 @@ func TestJellyfinContract(t *testing.T) {
 				}
 			}
 
+			// ---- case-insensitive routing (ASP.NET semantics)
+			for _, p := range []string{"/users/me", "/system/info/public", "/SYSTEM/INFO", "/userviews?userId=" + uid, "/items/latest?userId=" + uid} {
+				if status, _ := c.do("GET", p, nil); status != 200 {
+					t.Errorf("case-insensitive route %s: want 200, got %d", p, status)
+				}
+			}
+			if status, raw := c.do("GET", "/items/00000000000000000000000000000000/images/primary", nil); status != 404 || !bytes.Contains(raw, []byte(`"status":404`)) {
+				t.Errorf("lowercase image route should reach the handler (ProblemDetails 404), got %d %q", status, truncate(raw))
+			}
+
 			// ---- item-level flows
 			all := c.call("GET", "/Items?recursive=true&userId="+uid, nil, 200)
 			byType := map[string]string{}
