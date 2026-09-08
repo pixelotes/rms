@@ -43,7 +43,7 @@ func FindSubtitles(videoPath string) []SubtitleTrack {
 		}
 
 		// Extract language from the part after the base: "video.en.srt" → "en"
-		suffix := name[len(base):]                      // e.g. ".en.srt" or ".srt"
+		suffix := name[len(base):]                                // e.g. ".en.srt" or ".srt"
 		suffix = strings.TrimSuffix(suffix, filepath.Ext(suffix)) // e.g. ".en" or ""
 		suffix = strings.TrimPrefix(suffix, ".")
 

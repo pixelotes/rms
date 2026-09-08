@@ -46,12 +46,12 @@ func jellyfinUserPolicy() map[string]interface{} {
 
 func jellyfinUserConfig() map[string]interface{} {
 	return map[string]interface{}{
-		"PlayDefaultAudioTrack":       true,
-		"DisplayMissingEpisodes":      false,
-		"GroupedFolders":              []string{},
-		"SubtitleMode":                "Default",
-		"DisplayCollectionsView":      false,
-		"EnableLocalPassword":         false,
+		"PlayDefaultAudioTrack":      true,
+		"DisplayMissingEpisodes":     false,
+		"GroupedFolders":             []string{},
+		"SubtitleMode":               "Default",
+		"DisplayCollectionsView":     false,
+		"EnableLocalPassword":        false,
 		"OrderedViews":               []string{},
 		"LatestItemsExcludes":        []string{},
 		"MyMediaExcludes":            []string{},

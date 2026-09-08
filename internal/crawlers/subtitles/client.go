@@ -60,20 +60,20 @@ type SearchOpts struct {
 type osResponse struct {
 	Data []struct {
 		Attributes struct {
-			Language         string  `json:"language"`
-			DownloadCount    int     `json:"download_count"`
-			HearingImpaired  bool    `json:"hearing_impaired"`
-			HD               bool    `json:"hd"`
-			FPS              float64 `json:"fps"`
-			Votes            int     `json:"votes"`
-			Ratings          float64 `json:"ratings"`
-			FromTrusted      bool    `json:"from_trusted"`
-			UploadDate       string  `json:"upload_date"`
-			AITranslated     bool    `json:"ai_translated"`
-			MachineTranslated bool   `json:"machine_translated"`
-			Release          string  `json:"release"`
-			MovieHashMatch   bool    `json:"moviehash_match"`
-			Uploader         struct {
+			Language          string  `json:"language"`
+			DownloadCount     int     `json:"download_count"`
+			HearingImpaired   bool    `json:"hearing_impaired"`
+			HD                bool    `json:"hd"`
+			FPS               float64 `json:"fps"`
+			Votes             int     `json:"votes"`
+			Ratings           float64 `json:"ratings"`
+			FromTrusted       bool    `json:"from_trusted"`
+			UploadDate        string  `json:"upload_date"`
+			AITranslated      bool    `json:"ai_translated"`
+			MachineTranslated bool    `json:"machine_translated"`
+			Release           string  `json:"release"`
+			MovieHashMatch    bool    `json:"moviehash_match"`
+			Uploader          struct {
 				Name string `json:"name"`
 			} `json:"uploader"`
 			Files []struct {
