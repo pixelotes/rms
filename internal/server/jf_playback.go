@@ -90,10 +90,23 @@ func (s *Server) jfVideoStream(w http.ResponseWriter, r *http.Request) {
 		path = videoPath
 	}
 
-	s.logDebug("VideoStream: serving %s (static=%s)", path, queryParam(r, "static", "Static"))
+	static := queryParam(r, "static", "Static")
+	s.logDebug("VideoStream: serving %s (static=%s)", path, static)
 
-	// Treat static=false same as direct play — we don't do real transcoding.
-	// Clients that request static=false expect a stream; serve direct play.
+	// Transcoding is only offered when player.stream_strategy lists
+	// "transcode": buildMediaSources then advertises a TranscodingUrl that
+	// carries rmsStrategy=transcode. Any other request (direct play, direct
+	// stream, or a client trying to force a transcode) is served as-is.
+	if queryParam(r, "rmsStrategy") == "transcode" && !strings.EqualFold(static, "true") &&
+		s.config.Player.AllowsStrategy("transcode") {
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Type", "video/mp4")
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		s.streamTranscode(w, r, path)
+		return
+	}
 	s.streamDirect(w, r, path)
 }
 
@@ -152,6 +165,18 @@ func (s *Server) jfSubtitleStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// mediaStreamDefaults adds the MediaStream fields that are version-specific.
+// IsOriginal was introduced in Jellyfin 12.0 and is not part of the 10.11
+// schema, so it is only emitted when the configured version is >= 12.0.
+func (s *Server) mediaStreamDefaults(stream map[string]interface{}) map[string]interface{} {
+	if s.jfVersionAtLeast(12, 0) {
+		if _, ok := stream["IsOriginal"]; !ok {
+			stream["IsOriginal"] = false
+		}
+	}
+	return stream
+}
+
 func (s *Server) buildMediaSources(videoPath string, playSessionID ...string) []map[string]interface{} {
 	info, err := os.Stat(videoPath)
 	if err != nil {
@@ -165,18 +190,6 @@ func (s *Server) buildMediaSources(videoPath string, playSessionID ...string) []
 	audioCodec := "aac"
 
 	streamIndex := 0
-// mediaStreamDefaults adds the MediaStream fields that are version-specific.
-// IsOriginal was introduced in Jellyfin 12.0 and is not part of the 10.11
-// schema, so it is only emitted when the configured version is >= 12.0.
-func (s *Server) mediaStreamDefaults(stream map[string]interface{}) map[string]interface{} {
-	if s.jfVersionAtLeast(12, 0) {
-		if _, ok := stream["IsOriginal"]; !ok {
-			stream["IsOriginal"] = false
-		}
-	}
-	return stream
-}
-
 	mediaStreams := []map[string]interface{}{
 		s.mediaStreamDefaults(map[string]interface{}{
 			"Type":                   "Video",
@@ -300,6 +313,17 @@ func (s *Server) mediaStreamDefaults(stream map[string]interface{}) map[string]i
 
 	if runTimeTicks == 0 {
 		delete(source, "RunTimeTicks")
+	}
+
+	// Opt-in transcoding (player.stream_strategy contains "transcode"):
+	// advertise a progressive (http) H.264/AAC MP4 transcode so clients that
+	// cannot direct play the source fall back to it instead of failing.
+	if s.config.Player.AllowsStrategy("transcode") {
+		source["SupportsTranscoding"] = true
+		source["TranscodingContainer"] = "mp4"
+		source["TranscodingUrl"] = fmt.Sprintf(
+			"/Videos/%s/stream.mp4?mediaSourceId=%s&playSessionId=%s&static=false&rmsStrategy=transcode&videoCodec=h264&audioCodec=aac&transcodingContainer=mp4",
+			sourceID, sourceID, sessionID)
 	}
 
 	return []map[string]interface{}{source}

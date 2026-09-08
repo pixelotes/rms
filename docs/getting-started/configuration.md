@@ -29,10 +29,11 @@ app:
   webhook_token: ""                   # If set, enables POST /api/v1/library/rescan-hook
 
 player:
-  stream_strategy:                    # Playback fallback order
+  stream_strategy:                    # Playback fallback order (default: direct, remux)
     - direct                          # Serve file as-is
-    - remux                           # Remux to MP4 via FFmpeg
-    - transcode                       # Transcode via FFmpeg
+    - remux                           # Remux to MP4 via FFmpeg (video stream-copy)
+    # - transcode                     # Re-encode via FFmpeg. Opt-in: too heavy for a Pi 3B.
+                                      # When listed, Jellyfin clients also get a TranscodingUrl.
 
 users:
   - username: admin

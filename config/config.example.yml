@@ -28,8 +28,13 @@ app:
   # webhook_token: "${RMS_WEBHOOK_TOKEN}"
 
 player:
-  # Strategies tried in order when playing video. Remove "transcode" on low-power devices.
-  stream_strategy: ["direct", "remux", "transcode"]
+  # Strategies tried in order when playing video. Default: ["direct", "remux"].
+  # "remux" copies the video stream (cheap); "transcode" re-encodes with ffmpeg
+  # and saturates a Raspberry Pi 3B, so it is OFF unless you list it here.
+  # When "transcode" is enabled, Jellyfin clients are also offered a progressive
+  # H.264/AAC MP4 transcode (TranscodingUrl) as a last resort.
+  stream_strategy: ["direct", "remux"]
+  # stream_strategy: ["direct", "remux", "transcode"]   # Pi 5 / x86 only
 
 libraries:
   - friendly_name: "Movies"

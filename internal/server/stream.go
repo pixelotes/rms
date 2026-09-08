@@ -41,6 +41,12 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	if strategy == "" {
 		strategy = "direct"
 	}
+	// Only strategies enabled in config may spawn ffmpeg; anything else
+	// silently degrades to direct play so a client cannot force a transcode.
+	if !s.config.Player.AllowsStrategy(strategy) {
+		log.Printf("stream: strategy %q not enabled in player.stream_strategy, using direct", strategy)
+		strategy = "direct"
+	}
 
 	switch strategy {
 	case "direct":
@@ -138,18 +144,23 @@ func (s *Server) streamRemuxPipe(w http.ResponseWriter, r *http.Request, filePat
 	}
 }
 
-// ffmpegStartSeconds parses ?start= from the request. Returns 0 (no seek)
-// for unset/invalid/negative values.
+// ffmpegStartSeconds parses the seek position from the request: ?start=
+// (seconds, native UI) or ?startTimeTicks= (Jellyfin, 100ns ticks). Returns
+// 0 (no seek) for unset/invalid/negative values.
 func ffmpegStartSeconds(r *http.Request) float64 {
-	raw := r.URL.Query().Get("start")
-	if raw == "" {
-		return 0
+	if raw := r.URL.Query().Get("start"); raw != "" {
+		if v, err := strconv.ParseFloat(raw, 64); err == nil && v > 0 {
+			return v
+		}
 	}
-	v, err := strconv.ParseFloat(raw, 64)
-	if err != nil || v <= 0 {
-		return 0
+	for _, name := range []string{"startTimeTicks", "StartTimeTicks"} {
+		if raw := r.URL.Query().Get(name); raw != "" {
+			if ticks, err := strconv.ParseInt(raw, 10, 64); err == nil && ticks > 0 {
+				return float64(ticks) / 10000000
+			}
+		}
 	}
-	return v
+	return 0
 }
 
 // buildRemuxCache runs in its own goroutine, decoupled from any client
