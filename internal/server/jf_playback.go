@@ -117,13 +117,13 @@ func (s *Server) jfSubtitleStream(w http.ResponseWriter, r *http.Request) {
 
 	path, err := media.ItemPath(itemID)
 	if err != nil {
-		http.NotFound(w, r)
+		respondProblem(w, http.StatusNotFound, "Subtitle not found")
 		return
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
-		http.NotFound(w, r)
+		respondProblem(w, http.StatusNotFound, "Subtitle not found")
 		return
 	}
 
@@ -131,7 +131,7 @@ func (s *Server) jfSubtitleStream(w http.ResponseWriter, r *http.Request) {
 	if info.IsDir() {
 		videoPath = media.FindVideoFile(path)
 		if videoPath == "" {
-			http.NotFound(w, r)
+			respondProblem(w, http.StatusNotFound, "Subtitle not found")
 			return
 		}
 	}
@@ -143,7 +143,7 @@ func (s *Server) jfSubtitleStream(w http.ResponseWriter, r *http.Request) {
 	probeInfo, _ := media.Probe(videoPath)
 	subIdx := subtitleIndex - externalSubtitleBase(probeInfo)
 	if subIdx < 0 || subIdx >= len(subs) {
-		http.NotFound(w, r)
+		respondProblem(w, http.StatusNotFound, "Subtitle not found")
 		return
 	}
 

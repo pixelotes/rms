@@ -301,7 +301,7 @@ func (s *Server) jfGetItemImage(w http.ResponseWriter, r *http.Request) {
 	// <img>, so cross-origin is fine — no proxy needed here).
 	if ch, ok := tv.LookupChannel(itemID); ok {
 		if ch.Logo == "" {
-			http.NotFound(w, r)
+			respondProblem(w, http.StatusNotFound, "Image not found")
 			return
 		}
 		http.Redirect(w, r, ch.Logo, http.StatusFound)
@@ -315,12 +315,12 @@ func (s *Server) jfGetItemImage(w http.ResponseWriter, r *http.Request) {
 	} else {
 		path, err := media.ItemPath(itemID)
 		if err != nil {
-			http.NotFound(w, r)
+			respondProblem(w, http.StatusNotFound, "Image not found")
 			return
 		}
 		info, err := os.Stat(path)
 		if err != nil {
-			http.NotFound(w, r)
+			respondProblem(w, http.StatusNotFound, "Image not found")
 			return
 		}
 		if info.IsDir() {
@@ -336,7 +336,7 @@ func (s *Server) jfGetItemImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if imgPath == "" {
-		http.NotFound(w, r)
+		respondProblem(w, http.StatusNotFound, "Image not found")
 		return
 	}
 

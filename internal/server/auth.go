@@ -170,13 +170,13 @@ func (s *Server) jellyfinAuthMiddleware(next http.Handler) http.Handler {
 		}
 
 		if tokenStr == "" {
-			respondError(w, http.StatusUnauthorized, "Unauthorized")
+			respondProblem(w, http.StatusUnauthorized, "Unauthorized")
 			return
 		}
 
 		username := s.parseToken(tokenStr)
 		if username == "" {
-			respondError(w, http.StatusUnauthorized, "Invalid or expired token")
+			respondProblem(w, http.StatusUnauthorized, "Invalid or expired token")
 			return
 		}
 
