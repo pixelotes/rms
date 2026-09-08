@@ -81,6 +81,10 @@ type PlayerConfig struct {
 	// fallback order. "direct" is always allowed. "remux" and "transcode"
 	// spawn ffmpeg; "transcode" is CPU-heavy and is OFF unless listed here.
 	StreamStrategy []string `yaml:"stream_strategy"`
+	// MaxFFmpegProcesses caps how many ffmpeg remux/transcode processes may
+	// run at once. Extra requests get 503 instead of fighting for the CPU.
+	// Default 1 (a Raspberry Pi 3B cannot sustain more).
+	MaxFFmpegProcesses int `yaml:"max_ffmpeg_processes"`
 }
 
 // AllowsStrategy reports whether a streaming strategy is enabled in config.
@@ -194,6 +198,9 @@ func (c *Config) setDefaults() {
 		// Transcoding is opt-in: it saturates a Raspberry Pi 3B, so the
 		// default only allows direct play and (stream-copy) remux.
 		c.Player.StreamStrategy = []string{"direct", "remux"}
+	}
+	if c.Player.MaxFFmpegProcesses <= 0 {
+		c.Player.MaxFFmpegProcesses = 1
 	}
 	if c.Crawlers.AutoScan.IntervalHours == 0 {
 		c.Crawlers.AutoScan.IntervalHours = 24

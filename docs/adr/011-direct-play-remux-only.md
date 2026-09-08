@@ -87,7 +87,8 @@ On a Pi 5 or x86, `[direct, remux, transcode]` is fine.
 - Transcode has no seek support on first play (live pipe, no `Content-Length`)
 - No adaptive bitrate: the client gets one fixed resolution/bitrate
 - No subtitle burning
-- No transcode queue: concurrent transcode requests compete for the same CPU
+- No transcode queue: `player.max_ffmpeg_processes` (default 1) caps concurrent
+  remux/transcode processes and answers 503 beyond it, but there is no waiting queue
 
 ## References
 

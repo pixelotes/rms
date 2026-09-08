@@ -60,6 +60,27 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// tryAcquireFFmpeg reserves one of the player.max_ffmpeg_processes slots
+// without blocking. When none is free it answers 503 and returns false; the
+// caller must not spawn ffmpeg. Release with releaseFFmpeg.
+func (s *Server) tryAcquireFFmpeg(w http.ResponseWriter, r *http.Request, what string) bool {
+	select {
+	case s.ffmpegSlots <- struct{}{}:
+		return true
+	default:
+		log.Printf("stream: %s rejected, %d ffmpeg process(es) already running (player.max_ffmpeg_processes)",
+			what, cap(s.ffmpegSlots))
+		w.Header().Set("Retry-After", "30")
+		respondErrorFor(w, r, http.StatusServiceUnavailable, "Server is busy: ffmpeg process limit reached")
+		return false
+	}
+}
+
+// acquireFFmpeg blocks until a slot is free (background jobs only).
+func (s *Server) acquireFFmpeg() { s.ffmpegSlots <- struct{}{} }
+
+func (s *Server) releaseFFmpeg() { <-s.ffmpegSlots }
+
 func (s *Server) streamDirect(w http.ResponseWriter, r *http.Request, filePath string) {
 	http.ServeFile(w, r, filePath)
 }
@@ -104,6 +125,10 @@ func (s *Server) streamRemuxPipe(w http.ResponseWriter, r *http.Request, filePat
 		http.ServeFile(w, r, filePath)
 		return
 	}
+	if !s.tryAcquireFFmpeg(w, r, "remux") {
+		return
+	}
+	defer s.releaseFFmpeg()
 
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Connection", "keep-alive")
@@ -175,6 +200,8 @@ func (s *Server) buildRemuxCache(filePath, key string) {
 		s.streamCache.complete(key, false)
 		return
 	}
+	s.acquireFFmpeg()
+	defer s.releaseFFmpeg()
 
 	args := []string{
 		"-fflags", "+genpts+discardcorrupt",
@@ -208,6 +235,10 @@ func (s *Server) streamTranscode(w http.ResponseWriter, r *http.Request, filePat
 		http.ServeFile(w, r, filePath)
 		return
 	}
+	if !s.tryAcquireFFmpeg(w, r, "transcode") {
+		return
+	}
+	defer s.releaseFFmpeg()
 
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Connection", "keep-alive")

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,7 @@ type Server struct {
 	userData    *UserDataStore
 	syncQueue   *SyncQueueStore
 	streamCache *streamCache
+	ffmpegSlots chan struct{} // bounded by player.max_ffmpeg_processes
 
 	// webhook debounce (Paso 2)
 	rescanMu    sync.Mutex
@@ -34,6 +36,7 @@ func New(cfg *config.Config) *Server {
 	s.userData = NewUserDataStore(cfg.App.UserdataPath)
 	s.syncQueue = NewSyncQueueStore()
 	s.streamCache = newStreamCache(cfg.App.CachePath, cfg.App.CacheMaxGB)
+	s.ffmpegSlots = make(chan struct{}, cfg.Player.MaxFFmpegProcesses)
 	s.router = mux.NewRouter()
 	if cfg.App.Debug {
 		s.router.Use(loggingMiddleware)
@@ -528,11 +531,27 @@ func respondError(w http.ResponseWriter, status int, msg string) {
 	respondJSON(w, status, map[string]string{"error": msg})
 }
 
+// respondErrorFor picks the error body by route family: the native /api/v1
+// API keeps {"error": msg}; every other path is the Jellyfin surface and gets
+// RFC 7807 ProblemDetails as its spec declares.
+func respondErrorFor(w http.ResponseWriter, r *http.Request, status int, msg string) {
+	if strings.HasPrefix(r.URL.Path, "/api/v1/") {
+		respondError(w, status, msg)
+		return
+	}
+	respondProblem(w, status, msg)
+}
+
 // respondProblem writes an RFC 7807 ProblemDetails body, which is what the
 // Jellyfin OpenAPI spec declares for every documented error response.
 func respondProblem(w http.ResponseWriter, status int, detail string) {
+	// RFC 9110 numbers 4xx codes under section 15.5 and 5xx under 15.6.
+	section := "15.5." + strconv.Itoa(status-399)
+	if status >= 500 {
+		section = "15.6." + strconv.Itoa(status-499)
+	}
 	body := map[string]interface{}{
-		"type":   "https://tools.ietf.org/html/rfc9110#section-15.5." + strconv.Itoa(status-399),
+		"type":   "https://tools.ietf.org/html/rfc9110#section-" + section,
 		"title":  http.StatusText(status),
 		"status": status,
 	}

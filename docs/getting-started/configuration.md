@@ -34,6 +34,7 @@ player:
     - remux                           # Remux to MP4 via FFmpeg (video stream-copy)
     # - transcode                     # Re-encode via FFmpeg. Opt-in: too heavy for a Pi 3B.
                                       # When listed, Jellyfin clients also get a TranscodingUrl.
+  max_ffmpeg_processes: 1             # Concurrent remux/transcode processes; extra requests get 503
 
 users:
   - username: admin

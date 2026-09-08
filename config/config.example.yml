@@ -35,6 +35,9 @@ player:
   # H.264/AAC MP4 transcode (TranscodingUrl) as a last resort.
   stream_strategy: ["direct", "remux"]
   # stream_strategy: ["direct", "remux", "transcode"]   # Pi 5 / x86 only
+  # Max simultaneous ffmpeg processes (remux/transcode). Extra requests get a
+  # 503 instead of saturating the CPU. Default 1; raise on a Pi 5 / x86.
+  max_ffmpeg_processes: 1
 
 libraries:
   - friendly_name: "Movies"
