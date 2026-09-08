@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/gorilla/mux"
 	"net/http"
 	"strings"
 	"time"
@@ -179,9 +180,36 @@ func (s *Server) jellyfinAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// RMS derives the acting user from the token only. A request that
+		// names a different user (query ?userId= or the legacy /Users/{userId}
+		// path) would otherwise silently receive the caller's own data, so it
+		// is refused instead. Mismatched IDs are compared GUID-insensitively
+		// (clients may drop the dashes).
+		if requested := requestedUserID(r); requested != "" && !sameGUID(requested, stableUserID(username)) {
+			respondProblem(w, http.StatusForbidden, "userId does not match the authenticated user")
+			return
+		}
+
 		ctx := context.WithValue(r.Context(), contextKeyUser, username)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// requestedUserID returns the user id named by the request, from the query
+// string or the route, or "" when none is given.
+func requestedUserID(r *http.Request) string {
+	for _, name := range []string{"userId", "UserId", "userid"} {
+		if v := r.URL.Query().Get(name); v != "" {
+			return v
+		}
+	}
+	return mux.Vars(r)["userId"]
+}
+
+// sameGUID compares two GUID strings ignoring case and dashes.
+func sameGUID(a, b string) bool {
+	norm := func(s string) string { return strings.ToLower(strings.ReplaceAll(s, "-", "")) }
+	return norm(a) == norm(b)
 }
 
 // parseToken validates a JWT and returns the username, or "" if invalid.
