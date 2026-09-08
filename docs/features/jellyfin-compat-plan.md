@@ -17,6 +17,8 @@ full Jellyfin database.
 - API specs available locally:
   - `specs/jellyfin-openapi-10.10.7.json`
   - `specs/jellyfin-openapi-10.11.8.json`
+  - `specs/jellyfin-openapi-10.11.9.json`
+  - `specs/jellyfin-openapi-12.0.json`
 
 ## Quick Wins
 

@@ -1,14 +1,14 @@
-# Comparación de endpoints: Jellyfin 10.11.9 → 12.0-rc1 (solo endpoints implementados)
+# Comparación de endpoints: Jellyfin 10.11.9 → 12.0 (solo endpoints implementados)
 
 **Fecha:** 2026-06-26
-**Specs comparados:** `specs/jellyfin-openapi-10.11.9.json` (v10.11.9) vs `specs/jellyfin-openapi-12.0-rc1.json` (v12.0.0)
+**Specs comparados:** `specs/jellyfin-openapi-10.11.9.json` (v10.11.9) vs `specs/jellyfin-openapi-12.0.json` (v12.0.0)
 **Objetivo:** detectar si **parámetros** o **forma de respuesta** cambian en los endpoints que RMS ya implementa, de cara a compatibilidad con 12.0.
 
 ## Metodología y alcance
 
 - Se extrajo de [server.go](../internal/server/server.go) la lista de rutas Jellyfin registradas (303 pares método+ruta), se normalizaron los nombres de parámetros de ruta y se filtraron las rutas internas `/api/v1`.
-- Se cruzó con el spec 12.0-rc1 → **246 operaciones implementadas que también existen en 12.0** (la intersección que realmente importa).
-- Para cada una se comparó entre 10.11.9 y 12.0-rc1: `parameters` (nombre, ubicación, requerido, tipo), `requestBody` y los schemas de cada código de respuesta.
+- Se cruzó con el spec 12.0 → **246 operaciones implementadas que también existen en 12.0** (la intersección que realmente importa).
+- Para cada una se comparó entre 10.11.9 y 12.0: `parameters` (nombre, ubicación, requerido, tipo), `requestBody` y los schemas de cada código de respuesta.
 - Adicionalmente se diffearon los **schemas de componentes** referenciados directamente por las respuestas/bodies de esos endpoints (61 schemas), a nivel de nombre+tipo de propiedad de primer nivel.
 
 **Limitaciones:** el diff de componentes cubre el primer nivel de propiedades de los 61 schemas referenciados directamente (no la clausura transitiva completa de DTOs anidados), y no detecta cambios de valores de `enum` ni de descripciones. Para un endpoint concreto crítico conviene revisar el schema a mano.
@@ -23,7 +23,7 @@
 | Schemas de componentes referenciados con cambios | **3** (todos aditivos salvo 1 campo eliminado) |
 | Rutas nuevas en 12.0 (no implementadas) | 1 (`GET /Items/{itemId}/Collections`) |
 
-**Conclusión: 12.0-rc1 es prácticamente compatible a nivel de firma con lo ya implementado.** Todos los cambios relevantes son aditivos (nuevos query params opcionales, nuevos campos en DTOs), que un servidor tolerante ignora sin romper clientes.
+**Conclusión: 12.0 es prácticamente compatible a nivel de firma con lo ya implementado.** Todos los cambios relevantes son aditivos (nuevos query params opcionales, nuevos campos en DTOs), que un servidor tolerante ignora sin romper clientes.
 
 ## Cambios de firma por operación (16)
 
