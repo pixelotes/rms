@@ -530,6 +530,23 @@ func TestJellyfinContract(t *testing.T) {
 				if got, total := len(items(page)), page["TotalRecordCount"]; got != 1 || total != float64(3) {
 					t.Errorf("Episodes paging: got %d items, TotalRecordCount %v", got, total)
 				}
+				// adjacentTo keeps the item and its neighbours; startItemId skips to the item.
+				if all := items(eps); len(all) == 3 {
+					second, _ := all[1]["Id"].(string)
+					adj := items(c.call("GET", "/Shows/"+sid+"/Episodes?userId="+uid+"&adjacentTo="+second, nil, 200))
+					if len(adj) != 3 || adj[1]["Id"] != second {
+						t.Errorf("adjacentTo(middle): want 3 with the item in the middle, got %v", names(adj))
+					}
+					first, _ := all[0]["Id"].(string)
+					adj = items(c.call("GET", "/Shows/"+sid+"/Episodes?userId="+uid+"&adjacentTo="+first, nil, 200))
+					if len(adj) != 2 || adj[0]["Id"] != first {
+						t.Errorf("adjacentTo(first): want 2 starting with the item, got %v", names(adj))
+					}
+					from := items(c.call("GET", "/Shows/"+sid+"/Episodes?userId="+uid+"&startItemId="+second, nil, 200))
+					if len(from) != 2 || from[0]["Id"] != second {
+						t.Errorf("startItemId: want 2 starting with the item, got %v", names(from))
+					}
+				}
 			}
 
 			// ---- /Items filters and sorting

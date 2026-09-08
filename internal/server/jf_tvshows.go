@@ -142,6 +142,33 @@ func (s *Server) jfGetEpisodes(w http.ResponseWriter, r *http.Request) {
 		return a < b
 	})
 
+	// ?startItemId=X drops everything before X; ?adjacentTo=X keeps X and its
+	// immediate neighbours (Jellyfin's FilterForAdjacency), which clients use
+	// for the "previous / next episode" strip around the one playing.
+	if startID := queryParam(r, "startItemId", "StartItemId"); startID != "" {
+		for i, ep := range episodes {
+			if sameGUID(itemString(ep, "Id"), startID) {
+				episodes = episodes[i:]
+				break
+			}
+		}
+	}
+	if adjacent := queryParam(r, "adjacentTo", "AdjacentTo"); adjacent != "" {
+		for i, ep := range episodes {
+			if sameGUID(itemString(ep, "Id"), adjacent) {
+				lo, hi := i-1, i+2
+				if lo < 0 {
+					lo = 0
+				}
+				if hi > len(episodes) {
+					hi = len(episodes)
+				}
+				episodes = episodes[lo:hi]
+				break
+			}
+		}
+	}
+
 	page, startIndex, total := paginateItems(episodes, r)
 	s.patchItemsUserData(page, r)
 	respondJSON(w, http.StatusOK, map[string]interface{}{
