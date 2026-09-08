@@ -170,13 +170,13 @@ func (s *Server) jellyfinAuthMiddleware(next http.Handler) http.Handler {
 		}
 
 		if tokenStr == "" {
-			respondProblem(w, http.StatusUnauthorized, "Unauthorized")
+			w.WriteHeader(http.StatusUnauthorized) // spec: 401 has no body
 			return
 		}
 
 		username := s.parseToken(tokenStr)
 		if username == "" {
-			respondProblem(w, http.StatusUnauthorized, "Invalid or expired token")
+			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 
@@ -186,7 +186,7 @@ func (s *Server) jellyfinAuthMiddleware(next http.Handler) http.Handler {
 		// is refused instead. Mismatched IDs are compared GUID-insensitively
 		// (clients may drop the dashes).
 		if requested := requestedUserID(r); requested != "" && !sameGUID(requested, stableUserID(username)) {
-			respondProblem(w, http.StatusForbidden, "userId does not match the authenticated user")
+			w.WriteHeader(http.StatusForbidden) // spec: 403 has no body
 			return
 		}
 
