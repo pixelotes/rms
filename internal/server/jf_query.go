@@ -292,6 +292,25 @@ func (s *Server) sortItems(items []map[string]interface{}, q itemQuery, userID s
 	})
 }
 
+// paginateItems applies startIndex/limit and returns the page, the applied
+// start index and the total before paging (QueryResult semantics).
+func paginateItems(items []map[string]interface{}, r *http.Request) (page []map[string]interface{}, startIndex, total int) {
+	total = len(items)
+	startIndex, _ = strconv.Atoi(queryParam(r, "startIndex", "StartIndex"))
+	limit, _ := strconv.Atoi(queryParam(r, "limit", "Limit"))
+	if startIndex < 0 {
+		startIndex = 0
+	}
+	if startIndex >= total {
+		return items[:0], startIndex, total
+	}
+	page = items[startIndex:]
+	if limit > 0 && limit < len(page) {
+		page = page[:limit]
+	}
+	return page, startIndex, total
+}
+
 func cmpFloat(a, b float64) int {
 	switch {
 	case a < b:

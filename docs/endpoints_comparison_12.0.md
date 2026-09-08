@@ -113,6 +113,6 @@ Se corrigieron estos fallos, todos presentes también con el spec 10.11.9 (no er
 
 Desviaciones conocidas que se mantienen a propósito (comportamiento, no forma):
 
-- `userId` (query) se ignora en todos los endpoints: el usuario se deriva siempre del token. Correcto para clientes normales; un admin no puede consultar datos de otro usuario.
-- Muchos parámetros de filtrado/orden (`sortOrder`, `excludeItemTypes`, `genres`, `years`, `isFavorite`, `season`, `adjacentTo`, parámetros de transcodificación…) se aceptan pero no se aplican. Los de redimensionado de imágenes (`maxWidth`, `maxHeight`, `quality`, `format`) se aplican solo si `app.cache_path` está configurado.
+- `userId` (query o ruta) debe coincidir con el usuario del token; si no, 403. RMS no tiene administración multiusuario.
+- `GET /Items` aplica `sortBy`/`sortOrder` (cualquier `ItemSortBy`), `excludeItemTypes`, `genres`, `years`, `isFavorite`, `isPlayed`, `filters`, `nameStartsWith*` y `minCommunityRating`; `Seasons`/`Episodes` aplican `startIndex`/`limit` y `season`. Siguen ignorándose `adjacentTo`, `isMissing` y los parámetros de negociación de transcodificación. Los de redimensionado de imágenes (`maxWidth`, `maxHeight`, `quality`, `format`) se aplican solo si `app.cache_path` está configurado.
 - `GET /System/Ping` devuelve `text/plain` sin comillas, igual que Jellyfin real.
