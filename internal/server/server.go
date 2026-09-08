@@ -21,6 +21,7 @@ type Server struct {
 	config      *config.Config
 	httpServer  *http.Server
 	router      *mux.Router
+	handler     http.Handler // router wrapped with Jellyfin request-compat rewrites
 	userData    *UserDataStore
 	syncQueue   *SyncQueueStore
 	streamCache *streamCache
@@ -42,9 +43,10 @@ func New(cfg *config.Config) *Server {
 		s.router.Use(loggingMiddleware)
 	}
 	s.registerRoutes()
+	s.handler = s.compatHandler(s.router)
 	s.httpServer = &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.App.Port),
-		Handler:      s.router,
+		Handler:      s.handler,
 		ReadTimeout:  0, // No timeout for streaming
 		WriteTimeout: 0, // No timeout for streaming
 		IdleTimeout:  120 * time.Second,

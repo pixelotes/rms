@@ -267,7 +267,7 @@ libraries:
 	}
 	srv := New(cfg)
 	media.PopulateIDStore(cfg.Libraries)
-	ts := httptest.NewServer(srv.router)
+	ts := httptest.NewServer(srv.handler)
 	t.Cleanup(ts.Close)
 	return ts, srv
 }
@@ -437,6 +437,12 @@ func TestJellyfinContract(t *testing.T) {
 				c.call(e.method, e.path, body, e.status)
 			}
 
+			// ---- legacy Emby prefixes and X-Emby-Authorization header
+			for _, p := range []string{"/emby/System/Info/Public", "/mediabrowser/System/Info/Public", "/EMBY/Users/Me"} {
+				if status, _ := c.do("GET", p, nil); status != 200 {
+					t.Errorf("legacy prefix %s: want 200, got %d", p, status)
+				}
+			}
 			// ---- item-level flows
 			all := c.call("GET", "/Items?recursive=true&userId="+uid, nil, 200)
 			byType := map[string]string{}
