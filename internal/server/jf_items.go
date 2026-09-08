@@ -63,7 +63,6 @@ func (s *Server) jfGetItems(w http.ResponseWriter, r *http.Request) {
 	libs := s.librariesForRequest(r)
 	parentID := queryParam(r, "parentId", "ParentId")
 	includeTypes := queryParam(r, "includeItemTypes", "IncludeItemTypes")
-	sortBy := queryParam(r, "sortBy", "SortBy")
 	limit, _ := strconv.Atoi(queryParam(r, "limit", "Limit"))
 	startIndex, _ := strconv.Atoi(queryParam(r, "startIndex", "StartIndex"))
 	searchTerm := queryParam(r, "searchTerm", "SearchTerm")
@@ -145,45 +144,12 @@ func (s *Server) jfGetItems(w http.ResponseWriter, r *http.Request) {
 		allItems = filtered
 	}
 
-	// Sort
-	if sortBy == "SortName" || sortBy == "Name" || sortBy == "" {
-		sort.Slice(allItems, func(i, j int) bool {
-			a, _ := allItems[i]["SortName"].(string)
-			b, _ := allItems[j]["SortName"].(string)
-			return strings.ToLower(a) < strings.ToLower(b)
-		})
-	} else if sortBy == "ProductionYear,SortName" || sortBy == "ProductionYear" {
-		sort.Slice(allItems, func(i, j int) bool {
-			ya, _ := allItems[i]["ProductionYear"].(int)
-			yb, _ := allItems[j]["ProductionYear"].(int)
-			if ya != yb {
-				return ya > yb // Newest first
-			}
-			a, _ := allItems[i]["SortName"].(string)
-			b, _ := allItems[j]["SortName"].(string)
-			return strings.ToLower(a) < strings.ToLower(b)
-		})
-	}
-
-	// User data filters
-	if f := queryParam(r, "filters", "Filters"); f != "" {
-		userID := stableUserID(usernameFromContext(r))
-		filtered := make([]map[string]interface{}, 0, len(allItems))
-		for _, item := range allItems {
-			id, _ := item["Id"].(string)
-			keep := true
-			if strings.Contains(f, "IsResumable") && !s.userData.IsResumable(userID, id) {
-				keep = false
-			}
-			if strings.Contains(f, "IsFavorite") && !s.userData.IsFavorite(userID, id) {
-				keep = false
-			}
-			if keep {
-				filtered = append(filtered, item)
-			}
-		}
-		allItems = filtered
-	}
+	// Filters (excludeItemTypes, genres, years, isFavorite/isPlayed, filters,
+	// nameStartsWith*, minCommunityRating) and ItemSortBy/SortOrder ordering.
+	userID := stableUserID(usernameFromContext(r))
+	q := parseItemQuery(r)
+	allItems = s.filterItems(allItems, q, userID)
+	s.sortItems(allItems, q, userID)
 
 	total := len(allItems)
 
