@@ -374,6 +374,12 @@ func (s *Server) jfGetItemImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Honour maxWidth/maxHeight/quality/format with a cached ffmpeg-resized
+	// variant when app.cache_path is set; otherwise serve the original.
+	if variant := s.imageVariant(r, imgPath); variant != "" {
+		imgPath = variant
+	}
+
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	http.ServeFile(w, r, imgPath)
 }
