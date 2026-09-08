@@ -19,8 +19,9 @@ RMS emulates a subset of the Jellyfin API — enough to work with popular client
 
 RMS registers routes that match the Jellyfin API surface. Clients connect to RMS as if it were a Jellyfin server. The key differences:
 
-- **No transcoding** — `SupportsDirectPlay` and `SupportsDirectStream` are always `true`. Clients fall back to direct play.
+- **No transcoding by default** — `SupportsDirectPlay` and `SupportsDirectStream` are always `true`; a progressive transcode is only advertised when `player.stream_strategy` lists `transcode`.
 - **No real sessions** — playback state is tracked in memory (or optionally persisted to file), but there's no session management.
+- **Minimal WebSocket** — `/socket` speaks just enough of the Jellyfin session protocol for clients to stay connected and refresh: `ForceKeepAlive`/`KeepAlive`, `UserDataChanged` when played/favorite/position/rating change, and `LibraryChanged` after a rescan. Subscriptions (`SessionsStart`, `ActivityLogEntryStart`...) are accepted and ignored.
 - **YAML-based user management** — users (and per-library access) are defined in `config.yml`. The built-in `rms` admin user with `app.ui_password` is always available and sees all libraries; additional users can be added under `users:`. There is no in-app registration, password reset, or admin panel.
 - **Stub endpoints** — many endpoints return empty responses. Clients handle this gracefully.
 

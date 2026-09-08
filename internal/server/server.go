@@ -23,6 +23,7 @@ type Server struct {
 	router      *mux.Router
 	handler     http.Handler // router wrapped with Jellyfin request-compat rewrites
 	routeIndex  map[int][]routeTemplate
+	wsHub       *wsHub // Jellyfin /socket connections
 	userData    *UserDataStore
 	syncQueue   *SyncQueueStore
 	streamCache *streamCache
@@ -38,6 +39,7 @@ func New(cfg *config.Config) *Server {
 	s.userData = NewUserDataStore(cfg.App.UserdataPath)
 	s.syncQueue = NewSyncQueueStore()
 	s.streamCache = newStreamCache(cfg.App.CachePath, cfg.App.CacheMaxGB)
+	s.wsHub = newWSHub()
 	s.ffmpegSlots = make(chan struct{}, cfg.Player.MaxFFmpegProcesses)
 	s.router = mux.NewRouter()
 	if cfg.App.Debug {
@@ -427,10 +429,8 @@ func (s *Server) registerRoutes() {
 		jfAuth.HandleFunc("/Jellyfin.Plugin.KodiSyncQueue/{userId}/GetItems", s.jfKodiSyncGetItems).Methods("GET")
 	}
 
-	// WebSocket stub (Jellyfin clients poll this constantly)
-	s.router.HandleFunc("/socket", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	})
+	// Jellyfin session WebSocket (KeepAlive, UserDataChanged, LibraryChanged).
+	s.router.HandleFunc("/socket", s.handleSocket).Methods("GET")
 
 	// Web UI static files
 	if s.config.App.UIEnabled {

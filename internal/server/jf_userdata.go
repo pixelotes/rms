@@ -278,6 +278,7 @@ func (s *Server) jfReportPlaybackStopped(w http.ResponseWriter, r *http.Request)
 	if req.ItemId != "" {
 		userID := stableUserID(usernameFromContext(r))
 		s.userData.SetPosition(userID, req.ItemId, req.PositionTicks)
+		s.notifyUserData(userID, req.ItemId) // Jellyfin notifies on stop, not on progress
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -287,6 +288,7 @@ func (s *Server) jfTogglePlayed(w http.ResponseWriter, r *http.Request) {
 	userID := stableUserID(usernameFromContext(r))
 	played := r.Method == "POST"
 	s.userData.SetPlayed(userID, itemID, played)
+	s.notifyUserData(userID, itemID)
 	respondJSON(w, http.StatusOK, s.userData.Get(userID, itemID))
 }
 
@@ -295,6 +297,7 @@ func (s *Server) jfToggleFavorite(w http.ResponseWriter, r *http.Request) {
 	userID := stableUserID(usernameFromContext(r))
 	favorite := r.Method == "POST"
 	s.userData.SetFavorite(userID, itemID, favorite)
+	s.notifyUserData(userID, itemID)
 	respondJSON(w, http.StatusOK, s.userData.Get(userID, itemID))
 }
 
@@ -325,6 +328,7 @@ func (s *Server) jfUpdateUserData(w http.ResponseWriter, r *http.Request) {
 		s.userData.SetLikes(userID, itemID, req.Likes)
 	}
 
+	s.notifyUserData(userID, itemID)
 	respondJSON(w, http.StatusOK, s.userData.Get(userID, itemID))
 }
 
@@ -340,6 +344,7 @@ func (s *Server) jfUserItemRating(w http.ResponseWriter, r *http.Request) {
 		likes := strings.EqualFold(queryParam(r, "likes", "Likes"), "true")
 		s.userData.SetLikes(userID, itemID, &likes)
 	}
+	s.notifyUserData(userID, itemID)
 	respondJSON(w, http.StatusOK, s.userData.Get(userID, itemID))
 }
 

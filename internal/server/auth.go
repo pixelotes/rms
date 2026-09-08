@@ -142,29 +142,28 @@ func (s *Server) jwtMiddleware(next http.Handler) http.Handler {
 
 // --- Jellyfin-Compatible Auth ---
 
+// tokenFromRequest returns the Jellyfin access token carried by a request:
+// X-Emby-Token / X-MediaBrowser-Token, "Authorization: MediaBrowser ...,
+// Token=..." (or its legacy name X-Emby-Authorization, still sent by the Kodi
+// addon, Yatse and jellyfin-web < 10.8), or the api_key query parameter.
+func tokenFromRequest(r *http.Request) string {
+	if t := r.Header.Get("X-Emby-Token"); t != "" {
+		return t
+	}
+	if t := r.Header.Get("X-MediaBrowser-Token"); t != "" {
+		return t
+	}
+	for _, h := range []string{"Authorization", "X-Emby-Authorization"} {
+		if t := tokenFromMediaBrowserHeader(r.Header.Get(h)); t != "" {
+			return t
+		}
+	}
+	return r.URL.Query().Get("api_key")
+}
+
 func (s *Server) jellyfinAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tokenStr := ""
-
-		if t := r.Header.Get("X-Emby-Token"); t != "" {
-			tokenStr = t
-		} else if t := r.Header.Get("X-MediaBrowser-Token"); t != "" {
-			tokenStr = t
-		}
-
-		// "Authorization: MediaBrowser ..., Token=..." is the current header;
-		// X-Emby-Authorization is its legacy name, still accepted by Jellyfin
-		// and still sent by older clients (Kodi addon, Yatse, jellyfin-web < 10.8).
-		for _, h := range []string{"Authorization", "X-Emby-Authorization"} {
-			if tokenStr == "" {
-				tokenStr = tokenFromMediaBrowserHeader(r.Header.Get(h))
-			}
-		}
-
-		if tokenStr == "" {
-			tokenStr = r.URL.Query().Get("api_key")
-		}
-
+		tokenStr := tokenFromRequest(r)
 		if tokenStr == "" {
 			w.WriteHeader(http.StatusUnauthorized) // spec: 401 has no body
 			return
