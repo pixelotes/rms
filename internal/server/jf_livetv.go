@@ -152,18 +152,8 @@ func (s *Server) channelMediaSource(ch *tv.Channel) map[string]interface{} {
 		"UseMostCompatibleTranscodingProfile": false,
 		"RequiredHttpHeaders":                 map[string]string{},
 		"MediaStreams": []map[string]interface{}{
-			s.mediaStreamDefaults(map[string]interface{}{
-				"Type": "Video", "Index": 0, "Codec": "h264",
-				"IsDefault": true, "IsExternal": false, "IsForced": false, "IsHearingImpaired": false,
-				"IsInterlaced": false, "IsTextSubtitleStream": false, "SupportsExternalStream": false,
-				"VideoRange": "SDR", "VideoRangeType": "SDR", "AudioSpatialFormat": "None",
-			}),
-			s.mediaStreamDefaults(map[string]interface{}{
-				"Type": "Audio", "Index": 1, "Codec": "aac", "Language": "und",
-				"IsDefault": true, "IsExternal": false, "IsForced": false, "IsHearingImpaired": false,
-				"IsInterlaced": false, "IsTextSubtitleStream": false, "SupportsExternalStream": false,
-				"VideoRange": "Unknown", "VideoRangeType": "Unknown", "AudioSpatialFormat": "None",
-			}),
+			s.mediaStream("Video", 0, map[string]interface{}{"Codec": "h264", "IsDefault": true}),
+			s.mediaStream("Audio", 1, map[string]interface{}{"Codec": "aac", "IsDefault": true, "Language": "und"}),
 		},
 		"TranscodingUrl":         nil,
 		"TranscodingSubProtocol": "hls", // non-nullable MediaStreamProtocol enum

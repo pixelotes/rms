@@ -256,6 +256,17 @@ func (s *Server) jfGetItem(w http.ResponseWriter, r *http.Request) {
 
 	libIdx := findLibraryIndex(path, libs)
 	item := s.buildJellyfinItem(path, info, libIdx, libs)
+	// Single-item fetches precede playback decisions: replace the listing's
+	// cache-only MediaSources with a real (cached) ffprobe result.
+	if _, ok := item["MediaSources"]; ok {
+		videoPath := path
+		if info.IsDir() {
+			videoPath = media.FindVideoFile(path)
+		}
+		if videoPath != "" {
+			item["MediaSources"] = s.buildMediaSources(videoPath, true, "")
+		}
+	}
 	item["UserData"] = s.userData.Get(stableUserID(usernameFromContext(r)), item["Id"].(string))
 	respondJSON(w, http.StatusOK, item)
 }

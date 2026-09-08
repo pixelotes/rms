@@ -203,7 +203,7 @@ func (s *Server) collectEpisodes(dir string, showID string, showPath string, epi
 			"VideoType":         "VideoFile",
 			"LocationType":      "FileSystem",
 			"Path":              fullPath,
-			"MediaSources":      s.buildMediaSources(fullPath),
+			"MediaSources":      s.buildMediaSources(fullPath, false, ""),
 			"UserData":          defaultUserData(epID),
 			"DateCreated":       fileDateCreated(fullPath),
 		}

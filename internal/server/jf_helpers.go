@@ -283,7 +283,7 @@ func (s *Server) buildFolderItem(path, name, id string, libIndex int, libs []con
 
 	if itemType == "Movie" {
 		if videoPath := media.FindVideoFile(path); videoPath != "" {
-			item["MediaSources"] = s.buildMediaSources(videoPath)
+			item["MediaSources"] = s.buildMediaSources(videoPath, false, "")
 			item["MediaType"] = "Video"
 			item["VideoType"] = "VideoFile"
 		}
@@ -311,7 +311,7 @@ func (s *Server) buildVideoItem(path, name, id string, libIndex int, libs []conf
 		"VideoType":    "VideoFile",
 		"LocationType": "FileSystem",
 		"Path":         path,
-		"MediaSources": s.buildMediaSources(path),
+		"MediaSources": s.buildMediaSources(path, false, ""),
 		"ImageTags":    s.imageTagsForVideo(path),
 		"UserData":     defaultUserData(id),
 		"People":       []interface{}{},
