@@ -61,11 +61,11 @@ func (s *Server) jfLiveTvChannel(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["channelId"]
 	ch, ok := tv.LookupChannel(id)
 	if !ok || !s.tvLibraryVisible(ch.LibKey, r) {
-		respondError(w, http.StatusNotFound, "Channel not found")
+		respondProblem(w, http.StatusNotFound, "Channel not found")
 		return
 	}
 	item := channelItem(ch)
-	item["MediaSources"] = []map[string]interface{}{channelMediaSource(ch)}
+	item["MediaSources"] = []map[string]interface{}{s.channelMediaSource(ch)}
 	respondJSON(w, http.StatusOK, item)
 }
 
@@ -84,11 +84,11 @@ func (s *Server) jfOpenLiveStream(w http.ResponseWriter, r *http.Request) {
 	}
 	ch, ok := tv.LookupChannel(id)
 	if !ok || !s.tvLibraryVisible(ch.LibKey, r) {
-		respondError(w, http.StatusNotFound, "Channel not found")
+		respondProblem(w, http.StatusNotFound, "Channel not found")
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"MediaSource": channelMediaSource(ch),
+		"MediaSource": s.channelMediaSource(ch),
 	})
 }
 
@@ -125,34 +125,47 @@ func channelItem(ch *tv.Channel) map[string]interface{} {
 // channelMediaSource builds the HLS MediaSource for a TV channel. It is an
 // infinite, non-seekable remote stream delivered through RMS's own /Videos
 // endpoint (which redirects/proxies upstream).
-func channelMediaSource(ch *tv.Channel) map[string]interface{} {
+func (s *Server) channelMediaSource(ch *tv.Channel) map[string]interface{} {
 	streamURL := "/Videos/" + ch.ID + "/stream"
-	session := "ps-" + ch.ID[:8]
 	return map[string]interface{}{
-		"Id":                    ch.ID,
-		"Path":                  streamURL,
-		"Protocol":              "Http",
-		"Type":                  "Default",
-		"Container":             "hls",
-		"Name":                  ch.Name,
-		"IsRemote":              true,
-		"IsInfiniteStream":      true,
-		"ETag":                  ch.ID,
-		"SupportsDirectPlay":    true,
-		"SupportsDirectStream":  true,
-		"SupportsTranscoding":   false,
-		"SupportsProbing":       false,
-		"RequiresOpening":       false,
-		"RequiresClosing":       false,
-		"RequiresLooping":       false,
-		"ReadAtNativeFramerate": false,
+		"Id":                                  ch.ID,
+		"Path":                                streamURL,
+		"Protocol":                            "Http",
+		"Type":                                "Default",
+		"Container":                           "hls",
+		"Name":                                ch.Name,
+		"IsRemote":                            true,
+		"IsInfiniteStream":                    true,
+		"ETag":                                ch.ID,
+		"SupportsDirectPlay":                  true,
+		"SupportsDirectStream":                true,
+		"SupportsTranscoding":                 false,
+		"SupportsProbing":                     false,
+		"RequiresOpening":                     false,
+		"RequiresClosing":                     false,
+		"RequiresLooping":                     false,
+		"ReadAtNativeFramerate":               false,
+		"IgnoreDts":                           false,
+		"IgnoreIndex":                         false,
+		"GenPtsInput":                         false,
+		"HasSegments":                         false,
+		"UseMostCompatibleTranscodingProfile": false,
+		"RequiredHttpHeaders":                 map[string]string{},
 		"MediaStreams": []map[string]interface{}{
-			{"Type": "Video", "Index": 0, "Codec": "h264", "IsDefault": true, "IsExternal": false, "VideoRange": "SDR"},
-			{"Type": "Audio", "Index": 1, "Codec": "aac", "IsDefault": true, "IsExternal": false, "Language": "und"},
+			s.mediaStreamDefaults(map[string]interface{}{
+				"Type": "Video", "Index": 0, "Codec": "h264",
+				"IsDefault": true, "IsExternal": false, "IsForced": false, "IsHearingImpaired": false,
+				"IsInterlaced": false, "IsTextSubtitleStream": false, "SupportsExternalStream": false,
+				"VideoRange": "SDR", "VideoRangeType": "SDR", "AudioSpatialFormat": "None",
+			}),
+			s.mediaStreamDefaults(map[string]interface{}{
+				"Type": "Audio", "Index": 1, "Codec": "aac", "Language": "und",
+				"IsDefault": true, "IsExternal": false, "IsForced": false, "IsHearingImpaired": false,
+				"IsInterlaced": false, "IsTextSubtitleStream": false, "SupportsExternalStream": false,
+				"VideoRange": "Unknown", "VideoRangeType": "Unknown", "AudioSpatialFormat": "None",
+			}),
 		},
-		"DirectStreamUrl":        streamURL + "?static=true&mediaSourceId=" + ch.ID,
 		"TranscodingUrl":         nil,
-		"TranscodingSubProtocol": nil,
-		"PlaySessionId":          session,
+		"TranscodingSubProtocol": "hls", // non-nullable MediaStreamProtocol enum
 	}
 }

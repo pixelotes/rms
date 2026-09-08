@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 
@@ -20,6 +21,16 @@ func (s *Server) jfNotFound(w http.ResponseWriter, r *http.Request) {
 func (s *Server) jfBrandingCSS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
+}
+
+// jfGetUtcTime implements GET /GetUtcTime (UtcTimeResponse), used by
+// jellyfin-web's time-sync/SyncPlay module right after login.
+func (s *Server) jfGetUtcTime(w http.ResponseWriter, r *http.Request) {
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.0000000Z")
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"RequestReceptionTime":     now,
+		"ResponseTransmissionTime": now,
+	})
 }
 
 func (s *Server) jfSystemPing(w http.ResponseWriter, r *http.Request) {
@@ -41,7 +52,6 @@ func (s *Server) jfSystemConfiguration(w http.ResponseWriter, r *http.Request) {
 		"UICulture":                 "en-US",
 		"MetadataCountryCode":       "US",
 		"PreferredMetadataLanguage": "en",
-		"EnableRemoteAccess":        true,
 		"IsStartupWizardCompleted":  true,
 	})
 }
@@ -96,7 +106,7 @@ func (s *Server) jfGroupingOptions(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, []map[string]interface{}{
 		{
 			"Name": "None",
-			"Type": "none",
+			"Id":   "None",
 		},
 	})
 }
@@ -217,26 +227,28 @@ func (s *Server) jfItemImages(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) jfMetadataEditor(w http.ResponseWriter, r *http.Request) {
 	itemID := mux.Vars(r)["itemId"]
-	item := map[string]interface{}{"Id": itemID}
 	libs := s.librariesForRequest(r)
-	if idx, ok := s.parseLibraryID(itemID, libs); ok {
-		item = map[string]interface{}{
-			"Name":     libs[idx].FriendlyName,
-			"Id":       itemID,
-			"Type":     "CollectionFolder",
-			"IsFolder": true,
-		}
+	// MetadataEditorInfo has no Item property; the lookup only validates that
+	// the item exists and is visible to the caller.
+	found := false
+	if _, ok := s.parseLibraryID(itemID, libs); ok {
+		found = true
 	} else if path, err := media.ItemPath(itemID); err == nil && media.IsPathAllowed(path, libs) {
-		if info, statErr := os.Stat(path); statErr == nil {
-			item = s.buildJellyfinItem(path, info, findLibraryIndex(path, libs), libs)
+		if _, statErr := os.Stat(path); statErr == nil {
+			found = true
 		}
 	}
+	if !found {
+		respondProblem(w, http.StatusNotFound, "Item not found")
+		return
+	}
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"Item":                  item,
 		"ParentalRatingOptions": []interface{}{},
 		"Countries":             []interface{}{},
 		"Cultures":              []interface{}{},
 		"ExternalIdInfos":       externalIDInfoList(),
+		"ContentType":           nil,
+		"ContentTypeOptions":    []interface{}{},
 	})
 }
 
@@ -246,10 +258,10 @@ func (s *Server) jfExternalIdInfos(w http.ResponseWriter, r *http.Request) {
 
 func externalIDInfoList() []map[string]interface{} {
 	return []map[string]interface{}{
-		{"Name": "TheMovieDb", "Key": "Tmdb", "Type": "Movie", "UrlFormatString": "https://www.themoviedb.org/movie/{0}"},
-		{"Name": "IMDb", "Key": "Imdb", "Type": "Movie", "UrlFormatString": "https://www.imdb.com/title/{0}"},
-		{"Name": "TheTVDB", "Key": "Tvdb", "Type": "Series", "UrlFormatString": "https://thetvdb.com/dereferrer/series/{0}"},
-		{"Name": "AniList", "Key": "AniList", "Type": "Series", "UrlFormatString": "https://anilist.co/anime/{0}"},
+		{"Name": "TheMovieDb", "Key": "Tmdb", "Type": "Movie"},
+		{"Name": "IMDb", "Key": "Imdb", "Type": "Movie"},
+		{"Name": "TheTVDB", "Key": "Tvdb", "Type": "Series"},
+		{"Name": "AniList", "Key": "AniList", "Type": "Series"},
 	}
 }
 
@@ -330,10 +342,17 @@ func (s *Server) jfMovieRecommendations(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	s.patchItemsUserData(items, r)
-	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"Items":              items,
-		"RecommendationType": "SimilarToRecentlyPlayed",
-	})
+	// Spec: RecommendationDto[] — one row per recommendation category.
+	recommendations := make([]map[string]interface{}, 0, 1)
+	if len(items) > 0 {
+		recommendations = append(recommendations, map[string]interface{}{
+			"Items":              items,
+			"RecommendationType": "SimilarToRecentlyPlayed",
+			"BaselineItemName":   "",
+			"CategoryId":         stableID("recommendation-similar-to-recently-played"),
+		})
+	}
+	respondJSON(w, http.StatusOK, recommendations)
 }
 
 func (s *Server) jfNextUp(w http.ResponseWriter, r *http.Request) {
@@ -443,12 +462,25 @@ func (s *Server) jfVirtualFolders(w http.ResponseWriter, r *http.Request) {
 		items = append(items, map[string]interface{}{
 			"Name":            lib.FriendlyName,
 			"Locations":       []string{lib.Path},
-			"CollectionType":  lib.ContentType,
+			"CollectionType":  virtualFolderCollectionType(lib.ContentType),
 			"ItemId":          libraryID(i),
 			"RefreshProgress": 0,
 		})
 	}
 	respondJSON(w, http.StatusOK, items)
+}
+
+// virtualFolderCollectionType maps content_type to a CollectionTypeOptions
+// enum value. Live TV libraries have no equivalent, so they return null.
+func virtualFolderCollectionType(contentType string) interface{} {
+	switch contentType {
+	case "tvseries", "anime":
+		return "tvshows"
+	case "tv":
+		return nil
+	default:
+		return "movies"
+	}
 }
 
 func (s *Server) jfPhysicalPaths(w http.ResponseWriter, r *http.Request) {
@@ -468,10 +500,11 @@ func (s *Server) jfLocalizationCultures(w http.ResponseWriter, r *http.Request) 
 	respondJSON(w, http.StatusOK, []map[string]string{{"Name": "en-US", "DisplayName": "English (United States)", "ThreeLetterISOLanguageName": "eng", "TwoLetterISOLanguageName": "en"}})
 }
 
+// jfLocalizationOptions returns LocalizationOption[] (UI languages).
 func (s *Server) jfLocalizationOptions(w http.ResponseWriter, r *http.Request) {
-	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"Countries": []map[string]string{{"Name": "United States", "DisplayName": "United States", "TwoLetterISORegionName": "US", "ThreeLetterISORegionName": "USA"}},
-		"Cultures":  []map[string]string{{"Name": "en-US", "DisplayName": "English (United States)", "ThreeLetterISOLanguageName": "eng", "TwoLetterISOLanguageName": "en"}},
+	respondJSON(w, http.StatusOK, []map[string]string{
+		{"Name": "English (United States)", "Value": "en-US"},
+		{"Name": "Español", "Value": "es"},
 	})
 }
 
@@ -493,17 +526,29 @@ func (s *Server) jfQuickConnectEnabled(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, false)
 }
 
+// Quick Connect is disabled in RMS. Each endpoint returns the error status the
+// spec (and real Jellyfin) uses for a disabled Quick Connect instead of a 200
+// with a body that does not match the declared schema.
 func (s *Server) jfQuickConnectInitiate(w http.ResponseWriter, r *http.Request) {
-	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"Error": "QuickConnect is not available",
-	})
+	// 12.0 documents a ProblemDetails body for the 401; 10.11 documents none.
+	if s.jfVersionAtLeast(12, 0) {
+		respondProblem(w, http.StatusUnauthorized, "Quick connect is disabled")
+		return
+	}
+	w.WriteHeader(http.StatusUnauthorized)
 }
 
-func (s *Server) jfQuickConnectUnavailable(w http.ResponseWriter, r *http.Request) {
-	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"Authenticated": false,
-		"Error":         "QuickConnect is not available",
-	})
+func (s *Server) jfQuickConnectConnect(w http.ResponseWriter, r *http.Request) {
+	respondProblem(w, http.StatusNotFound, "Unknown secret")
+}
+
+func (s *Server) jfQuickConnectAuthorize(w http.ResponseWriter, r *http.Request) {
+	respondProblem(w, http.StatusForbidden, "Quick connect is disabled")
+}
+
+func (s *Server) jfAuthenticateWithQuickConnect(w http.ResponseWriter, r *http.Request) {
+	// Spec documents 400 with no body for a disabled Quick Connect.
+	w.WriteHeader(http.StatusBadRequest)
 }
 
 func (s *Server) jfForgotPassword(w http.ResponseWriter, r *http.Request) {
@@ -518,22 +563,17 @@ func (s *Server) jfForgotPasswordPin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) jfAuthKey(w http.ResponseWriter, r *http.Request) {
-	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"AccessToken": "",
-		"Id":          stableID("auth-key"),
-	})
-}
-
 func (s *Server) jfStartupConfiguration(w http.ResponseWriter, r *http.Request) {
-	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"ServerName":                serverName,
+	cfg := map[string]interface{}{
 		"UICulture":                 "en-US",
 		"MetadataCountryCode":       "US",
 		"PreferredMetadataLanguage": "en",
-		"EnableRemoteAccess":        true,
-		"IsStartupWizardCompleted":  true,
-	})
+	}
+	if s.jfVersionAtLeast(10, 11) {
+		// ServerName was added to StartupConfigurationDto in 10.11.
+		cfg["ServerName"] = serverName
+	}
+	respondJSON(w, http.StatusOK, cfg)
 }
 
 func (s *Server) jfStartupUser(w http.ResponseWriter, r *http.Request) {

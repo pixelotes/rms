@@ -21,32 +21,31 @@ func (s *Server) jfPlaybackInfo(w http.ResponseWriter, r *http.Request) {
 	// TV channel: return its HLS MediaSource (infinite, non-seekable).
 	if ch, ok := tv.LookupChannel(itemID); ok {
 		if !s.tvLibraryVisible(ch.LibKey, r) {
-			respondError(w, http.StatusNotFound, "Item not found")
+			respondProblem(w, http.StatusNotFound, "Item not found")
 			return
 		}
 		respondJSON(w, http.StatusOK, map[string]interface{}{
-			"MediaSources":  []map[string]interface{}{channelMediaSource(ch)},
+			"MediaSources":  []map[string]interface{}{s.channelMediaSource(ch)},
 			"PlaySessionId": "ps-" + ch.ID[:8],
-			"ErrorCode":     "NoError",
 		})
 		return
 	}
 
 	path, err := media.ItemPath(itemID)
 	if err != nil {
-		respondError(w, http.StatusNotFound, "Item not found")
+		respondProblem(w, http.StatusNotFound, "Item not found")
 		return
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
-		respondError(w, http.StatusNotFound, "Item not found")
+		respondProblem(w, http.StatusNotFound, "Item not found")
 		return
 	}
 	if info.IsDir() {
 		videoPath := media.FindVideoFile(path)
 		if videoPath == "" {
-			respondError(w, http.StatusNotFound, "No video file found")
+			respondProblem(w, http.StatusNotFound, "No video file found")
 			return
 		}
 		path = videoPath
@@ -54,11 +53,8 @@ func (s *Server) jfPlaybackInfo(w http.ResponseWriter, r *http.Request) {
 
 	playSessionID := fmt.Sprintf("ps-%s", itemID[:8])
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"MediaSources":           s.buildMediaSources(path, playSessionID),
-		"PlaySessionId":          playSessionID,
-		"ErrorCode":              "NoError",
-		"TranscodingUrl":         nil,
-		"TranscodingSubProtocol": nil,
+		"MediaSources":  s.buildMediaSources(path, playSessionID),
+		"PlaySessionId": playSessionID,
 	})
 }
 
@@ -74,21 +70,21 @@ func (s *Server) jfVideoStream(w http.ResponseWriter, r *http.Request) {
 	path, err := media.ItemPath(itemID)
 	if err != nil {
 		s.logDebug("VideoStream: ItemPath(%s) failed: %v", itemID, err)
-		respondError(w, http.StatusNotFound, "Item not found")
+		respondProblem(w, http.StatusNotFound, "Item not found")
 		return
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
 		s.logDebug("VideoStream: Stat(%s) failed: %v", path, err)
-		respondError(w, http.StatusNotFound, "Item not found")
+		respondProblem(w, http.StatusNotFound, "Item not found")
 		return
 	}
 	if info.IsDir() {
 		videoPath := media.FindVideoFile(path)
 		if videoPath == "" {
 			s.logDebug("VideoStream: no video file in dir %s", path)
-			respondError(w, http.StatusNotFound, "No video file found")
+			respondProblem(w, http.StatusNotFound, "No video file found")
 			return
 		}
 		path = videoPath
@@ -143,7 +139,7 @@ func (s *Server) jfSubtitleStream(w http.ResponseWriter, r *http.Request) {
 	if format == "vtt" {
 		vttContent, err := media.ConvertSRTToVTT(sub.FilePath)
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "Failed to convert subtitle")
+			respondProblem(w, http.StatusInternalServerError, "Failed to convert subtitle")
 			return
 		}
 		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
@@ -169,8 +165,20 @@ func (s *Server) buildMediaSources(videoPath string, playSessionID ...string) []
 	audioCodec := "aac"
 
 	streamIndex := 0
+// mediaStreamDefaults adds the MediaStream fields that are version-specific.
+// IsOriginal was introduced in Jellyfin 12.0 and is not part of the 10.11
+// schema, so it is only emitted when the configured version is >= 12.0.
+func (s *Server) mediaStreamDefaults(stream map[string]interface{}) map[string]interface{} {
+	if s.jfVersionAtLeast(12, 0) {
+		if _, ok := stream["IsOriginal"]; !ok {
+			stream["IsOriginal"] = false
+		}
+	}
+	return stream
+}
+
 	mediaStreams := []map[string]interface{}{
-		{
+		s.mediaStreamDefaults(map[string]interface{}{
 			"Type":                   "Video",
 			"Index":                  streamIndex,
 			"Codec":                  videoCodec,
@@ -184,10 +192,10 @@ func (s *Server) buildMediaSources(videoPath string, playSessionID ...string) []
 			"VideoRange":             "SDR",
 			"VideoRangeType":         "SDR",
 			"AudioSpatialFormat":     "None",
-		},
+		}),
 	}
 	streamIndex++
-	mediaStreams = append(mediaStreams, map[string]interface{}{
+	mediaStreams = append(mediaStreams, s.mediaStreamDefaults(map[string]interface{}{
 		"Type":                   "Audio",
 		"Index":                  streamIndex,
 		"Codec":                  audioCodec,
@@ -202,12 +210,12 @@ func (s *Server) buildMediaSources(videoPath string, playSessionID ...string) []
 		"VideoRangeType":         "Unknown",
 		"AudioSpatialFormat":     "None",
 		"Language":               "und",
-	})
+	}))
 	streamIndex++
 
 	subtitles := media.FindSubtitles(videoPath)
 	for i, sub := range subtitles {
-		mediaStreams = append(mediaStreams, map[string]interface{}{
+		mediaStreams = append(mediaStreams, s.mediaStreamDefaults(map[string]interface{}{
 			"Type":                   "Subtitle",
 			"Index":                  streamIndex,
 			"Codec":                  "srt",
@@ -226,7 +234,7 @@ func (s *Server) buildMediaSources(videoPath string, playSessionID ...string) []
 			"DeliveryMethod":         "External",
 			"DeliveryUrl":            fmt.Sprintf("/Videos/%s/%s/Subtitles/%d/0/Stream.srt", media.ItemID(videoPath), media.ItemID(videoPath), streamIndex),
 			"Path":                   sub.FilePath,
-		})
+		}))
 		streamIndex++
 	}
 
@@ -255,42 +263,39 @@ func (s *Server) buildMediaSources(videoPath string, playSessionID ...string) []
 		}
 	}
 
-	directStreamURL := fmt.Sprintf("/Videos/%s/stream.%s?static=true&mediaSourceId=%s&playSessionId=%s", sourceID, container, sourceID, sessionID)
 	source := map[string]interface{}{
-		"Id":                         sourceID,
-		"Path":                       videoPath,
-		"Protocol":                   "File",
-		"Type":                       "Default",
-		"Container":                  container,
-		"Size":                       info.Size(),
-		"Name":                       filepath.Base(videoPath),
-		"IsRemote":                   false,
-		"ETag":                       sourceID,
-		"RunTimeTicks":               runTimeTicks,
-		"SupportsDirectPlay":         true,
-		"SupportsDirectStream":       true,
-		"SupportsTranscoding":        false,
-		"SupportsProbing":            true,
-		"SupportsThumbnails":         false,
-		"ReadAtNativeFramerate":      false,
-		"IgnoreDts":                  false,
-		"IgnoreIndex":                false,
-		"GenPtsInput":                false,
-		"IsInfiniteStream":           false,
-		"RequiresOpening":            false,
-		"RequiresClosing":            false,
-		"RequiresLooping":            false,
-		"HasSegments":                false,
-		"DefaultAudioStreamIndex":    1,
-		"DefaultSubtitleStreamIndex": nil,
-		"Bitrate":                    8000000,
-		"RequiredHttpHeaders":        map[string]string{},
-		"MediaStreams":               mediaStreams,
-		"DirectStreamUrl":            directStreamURL,
-		"TranscodingUrl":             nil,
-		"TranscodingSubProtocol":     nil,
-		"TranscodingContainer":       nil,
-		"PlaySessionId":              sessionID,
+		"Id":                                  sourceID,
+		"Path":                                videoPath,
+		"Protocol":                            "File",
+		"Type":                                "Default",
+		"Container":                           container,
+		"Size":                                info.Size(),
+		"Name":                                filepath.Base(videoPath),
+		"IsRemote":                            false,
+		"ETag":                                sourceID,
+		"RunTimeTicks":                        runTimeTicks,
+		"SupportsDirectPlay":                  true,
+		"SupportsDirectStream":                true,
+		"SupportsTranscoding":                 false,
+		"SupportsProbing":                     true,
+		"ReadAtNativeFramerate":               false,
+		"IgnoreDts":                           false,
+		"IgnoreIndex":                         false,
+		"GenPtsInput":                         false,
+		"IsInfiniteStream":                    false,
+		"RequiresOpening":                     false,
+		"RequiresClosing":                     false,
+		"RequiresLooping":                     false,
+		"HasSegments":                         false,
+		"UseMostCompatibleTranscodingProfile": false,
+		"DefaultAudioStreamIndex":             1,
+		"DefaultSubtitleStreamIndex":          nil,
+		"Bitrate":                             8000000,
+		"RequiredHttpHeaders":                 map[string]string{},
+		"MediaStreams":                        mediaStreams,
+		"TranscodingUrl":                      nil,
+		"TranscodingSubProtocol":              "http", // non-nullable MediaStreamProtocol enum
+		"TranscodingContainer":                nil,
 	}
 
 	if runTimeTicks == 0 {

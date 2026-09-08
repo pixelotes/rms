@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +32,7 @@ type UserDataEntry struct {
 	IsFavorite            bool   `json:"is_favorite"`
 	Played                bool   `json:"played"`
 	LastPlayedDate        string `json:"last_played_date,omitempty"`
+	Likes                 *bool  `json:"likes,omitempty"`
 }
 
 // NewUserDataStore creates a new store. If filePath is non-empty, data is
@@ -90,6 +92,9 @@ func (store *UserDataStore) toDTO(itemID string, entry *UserDataEntry) map[strin
 		if entry.LastPlayedDate != "" {
 			dto["LastPlayedDate"] = entry.LastPlayedDate
 		}
+		if entry.Likes != nil {
+			dto["Likes"] = *entry.Likes
+		}
 	}
 	return dto
 }
@@ -113,6 +118,15 @@ func (store *UserDataStore) SetPlayed(userID, itemID string, played bool) {
 		entry.PlaybackPositionTicks = 0
 	}
 	entry.LastPlayedDate = time.Now().UTC().Format("2006-01-02T15:04:05.0000000Z")
+	store.dirty = true
+}
+
+// SetLikes stores the like/dislike rating; nil clears it.
+func (store *UserDataStore) SetLikes(userID, itemID string, likes *bool) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	entry := store.ensureEntry(userID, itemID)
+	entry.Likes = likes
 	store.dirty = true
 }
 
@@ -288,20 +302,44 @@ func (s *Server) jfUpdateUserData(w http.ResponseWriter, r *http.Request) {
 	itemID := mux.Vars(r)["itemId"]
 	userID := stableUserID(usernameFromContext(r))
 
+	// UpdateUserItemDataDto: every field is nullable, so only the fields that
+	// are present in the body are applied (partial update).
 	var req struct {
-		PlaybackPositionTicks int64 `json:"PlaybackPositionTicks"`
-		PlayCount             int   `json:"PlayCount"`
-		IsFavorite            bool  `json:"IsFavorite"`
-		Played                bool  `json:"Played"`
+		PlaybackPositionTicks *int64 `json:"PlaybackPositionTicks"`
+		IsFavorite            *bool  `json:"IsFavorite"`
+		Played                *bool  `json:"Played"`
+		Likes                 *bool  `json:"Likes"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
-	s.userData.SetPosition(userID, itemID, req.PlaybackPositionTicks)
-	if req.Played {
-		s.userData.SetPlayed(userID, itemID, true)
+	if req.PlaybackPositionTicks != nil {
+		s.userData.SetPosition(userID, itemID, *req.PlaybackPositionTicks)
 	}
-	s.userData.SetFavorite(userID, itemID, req.IsFavorite)
+	if req.Played != nil {
+		s.userData.SetPlayed(userID, itemID, *req.Played)
+	}
+	if req.IsFavorite != nil {
+		s.userData.SetFavorite(userID, itemID, *req.IsFavorite)
+	}
+	if req.Likes != nil {
+		s.userData.SetLikes(userID, itemID, req.Likes)
+	}
 
+	respondJSON(w, http.StatusOK, s.userData.Get(userID, itemID))
+}
+
+// jfUserItemRating handles POST/DELETE /UserItems/{itemId}/Rating.
+// POST reads the `likes` query param; DELETE clears the rating. Both return
+// the updated UserItemDataDto (200), as the spec requires.
+func (s *Server) jfUserItemRating(w http.ResponseWriter, r *http.Request) {
+	itemID := mux.Vars(r)["itemId"]
+	userID := stableUserID(usernameFromContext(r))
+	if r.Method == http.MethodDelete {
+		s.userData.SetLikes(userID, itemID, nil)
+	} else {
+		likes := strings.EqualFold(queryParam(r, "likes", "Likes"), "true")
+		s.userData.SetLikes(userID, itemID, &likes)
+	}
 	respondJSON(w, http.StatusOK, s.userData.Get(userID, itemID))
 }
 

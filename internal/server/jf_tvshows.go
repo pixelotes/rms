@@ -17,13 +17,13 @@ func (s *Server) jfGetSeasons(w http.ResponseWriter, r *http.Request) {
 
 	showPath, err := media.ItemPath(showID)
 	if err != nil {
-		respondError(w, http.StatusNotFound, "Show not found")
+		respondProblem(w, http.StatusNotFound, "Show not found")
 		return
 	}
 
 	entries, err := os.ReadDir(showPath)
 	if err != nil {
-		respondError(w, http.StatusNotFound, "Show not found")
+		respondProblem(w, http.StatusNotFound, "Show not found")
 		return
 	}
 
