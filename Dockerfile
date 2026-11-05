@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 WORKDIR /build
 COPY go.mod go.sum ./
@@ -8,7 +8,7 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o rms ./cmd/rms
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o subcrawler ./cmd/subcrawler
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o metacrawler ./cmd/metacrawler
 
-FROM alpine:3.21
+FROM alpine:3.24
 
 RUN apk add --no-cache ffmpeg tzdata
 
