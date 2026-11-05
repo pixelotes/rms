@@ -54,7 +54,7 @@ header { padding: 20px 0 10px; }
 .action-btn svg { width: 14px; height: 14px; }
 
 /* --- File Grid (default) --- */
-.file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 16px; padding: 16px 0 40px; }
+.file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(clamp(140px, 20vw, 220px), 1fr)); gap: 16px; padding: 16px 0 40px; }
 .file-item { background: #141414; border-radius: 8px; overflow: hidden; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; }
 .file-item:hover { transform: translateY(-4px); box-shadow: 0 8px 24px rgba(0,0,0,0.5); }
 .item-poster { aspect-ratio: 2/3; background: #1a1a1a; display: flex; align-items: center; justify-content: center; color: #444; font-size: 32px; overflow: hidden; }

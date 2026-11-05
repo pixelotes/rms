@@ -58,7 +58,8 @@ if s.jfVersionAtLeast(10, 11) {
 Official Jellyfin OpenAPI specs are stored in `specs/` for reference:
 
 - `specs/jellyfin-openapi-10.10.7.json` — Jellyfin 10.10.x
-- `specs/jellyfin-openapi-10.11.8.json` — Jellyfin 10.11.x
+- `specs/jellyfin-openapi-10.11.8.json`, `specs/jellyfin-openapi-10.11.9.json` — Jellyfin 10.11.x
+- `specs/jellyfin-openapi-12.0.json` — Jellyfin 12.0 (stable)
 
 Use these to verify endpoint signatures, required DTO fields, and response shapes when adding or debugging compatibility.
 

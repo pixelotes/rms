@@ -31,12 +31,12 @@ func (k *KitsuClient) SearchAnime(title string) (*TVShowResult, error) {
 					En   string `json:"en"`
 					EnJp string `json:"en_jp"`
 				} `json:"titles"`
-				Synopsis      string  `json:"synopsis"`
-				StartDate     string  `json:"startDate"`
-				Status        string  `json:"status"`
-				EpisodeCount  int     `json:"episodeCount"`
-				EpisodeLength int     `json:"episodeLength"`
-				AverageRating string  `json:"averageRating"`
+				Synopsis      string `json:"synopsis"`
+				StartDate     string `json:"startDate"`
+				Status        string `json:"status"`
+				EpisodeCount  int    `json:"episodeCount"`
+				EpisodeLength int    `json:"episodeLength"`
+				AverageRating string `json:"averageRating"`
 				PosterImage   *struct {
 					Large    string `json:"large"`
 					Original string `json:"original"`

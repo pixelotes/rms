@@ -34,7 +34,7 @@ func (t *TVmazeClient) SearchTVShow(title string) (*TVShowResult, error) {
 			Rating struct {
 				Average float64 `json:"average"`
 			} `json:"rating"`
-			Genres []string `json:"genres"`
+			Genres  []string `json:"genres"`
 			Network *struct {
 				Name string `json:"name"`
 			} `json:"network"`

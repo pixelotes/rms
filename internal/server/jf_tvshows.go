@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -17,13 +18,13 @@ func (s *Server) jfGetSeasons(w http.ResponseWriter, r *http.Request) {
 
 	showPath, err := media.ItemPath(showID)
 	if err != nil {
-		respondError(w, http.StatusNotFound, "Show not found")
+		respondProblem(w, http.StatusNotFound, "Show not found")
 		return
 	}
 
 	entries, err := os.ReadDir(showPath)
 	if err != nil {
-		respondError(w, http.StatusNotFound, "Show not found")
+		respondProblem(w, http.StatusNotFound, "Show not found")
 		return
 	}
 
@@ -82,11 +83,12 @@ func (s *Server) jfGetSeasons(w http.ResponseWriter, r *http.Request) {
 		return a < b
 	})
 
-	s.patchItemsUserData(seasons, r)
+	page, startIndex, total := paginateItems(seasons, r)
+	s.patchItemsUserData(page, r)
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"Items":            seasons,
-		"StartIndex":       0,
-		"TotalRecordCount": len(seasons),
+		"Items":            page,
+		"StartIndex":       startIndex,
+		"TotalRecordCount": total,
 	})
 }
 
@@ -118,6 +120,17 @@ func (s *Server) jfGetEpisodes(w http.ResponseWriter, r *http.Request) {
 	episodes := make([]map[string]interface{}, 0)
 	s.collectEpisodes(seasonPath, showID, showPath, &episodes)
 
+	// ?season=N selects one season by number (alternative to seasonId).
+	if seasonNum, err := strconv.Atoi(queryParam(r, "season", "Season")); err == nil {
+		filtered := make([]map[string]interface{}, 0, len(episodes))
+		for _, ep := range episodes {
+			if itemInt(ep, "ParentIndexNumber") == seasonNum {
+				filtered = append(filtered, ep)
+			}
+		}
+		episodes = filtered
+	}
+
 	sort.Slice(episodes, func(i, j int) bool {
 		si, _ := episodes[i]["ParentIndexNumber"].(int)
 		sj, _ := episodes[j]["ParentIndexNumber"].(int)
@@ -129,11 +142,39 @@ func (s *Server) jfGetEpisodes(w http.ResponseWriter, r *http.Request) {
 		return a < b
 	})
 
-	s.patchItemsUserData(episodes, r)
+	// ?startItemId=X drops everything before X; ?adjacentTo=X keeps X and its
+	// immediate neighbours (Jellyfin's FilterForAdjacency), which clients use
+	// for the "previous / next episode" strip around the one playing.
+	if startID := queryParam(r, "startItemId", "StartItemId"); startID != "" {
+		for i, ep := range episodes {
+			if sameGUID(itemString(ep, "Id"), startID) {
+				episodes = episodes[i:]
+				break
+			}
+		}
+	}
+	if adjacent := queryParam(r, "adjacentTo", "AdjacentTo"); adjacent != "" {
+		for i, ep := range episodes {
+			if sameGUID(itemString(ep, "Id"), adjacent) {
+				lo, hi := i-1, i+2
+				if lo < 0 {
+					lo = 0
+				}
+				if hi > len(episodes) {
+					hi = len(episodes)
+				}
+				episodes = episodes[lo:hi]
+				break
+			}
+		}
+	}
+
+	page, startIndex, total := paginateItems(episodes, r)
+	s.patchItemsUserData(page, r)
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"Items":            episodes,
-		"StartIndex":       0,
-		"TotalRecordCount": len(episodes),
+		"Items":            page,
+		"StartIndex":       startIndex,
+		"TotalRecordCount": total,
 	})
 }
 
@@ -203,7 +244,7 @@ func (s *Server) collectEpisodes(dir string, showID string, showPath string, epi
 			"VideoType":         "VideoFile",
 			"LocationType":      "FileSystem",
 			"Path":              fullPath,
-			"MediaSources":      s.buildMediaSources(fullPath),
+			"MediaSources":      s.buildMediaSources(fullPath, false, ""),
 			"UserData":          defaultUserData(epID),
 			"DateCreated":       fileDateCreated(fullPath),
 		}

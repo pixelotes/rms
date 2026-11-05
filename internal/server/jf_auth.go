@@ -46,12 +46,12 @@ func jellyfinUserPolicy() map[string]interface{} {
 
 func jellyfinUserConfig() map[string]interface{} {
 	return map[string]interface{}{
-		"PlayDefaultAudioTrack":       true,
-		"DisplayMissingEpisodes":      false,
-		"GroupedFolders":              []string{},
-		"SubtitleMode":                "Default",
-		"DisplayCollectionsView":      false,
-		"EnableLocalPassword":         false,
+		"PlayDefaultAudioTrack":      true,
+		"DisplayMissingEpisodes":     false,
+		"GroupedFolders":             []string{},
+		"SubtitleMode":               "Default",
+		"DisplayCollectionsView":     false,
+		"EnableLocalPassword":        false,
 		"OrderedViews":               []string{},
 		"LatestItemsExcludes":        []string{},
 		"MyMediaExcludes":            []string{},
@@ -106,7 +106,7 @@ func (s *Server) jfAuthenticateByName(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"Password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, "Invalid request")
+		respondProblem(w, http.StatusBadRequest, "Invalid request")
 		return
 	}
 
@@ -122,7 +122,7 @@ func (s *Server) jfAuthenticateByName(w http.ResponseWriter, r *http.Request) {
 
 	user := s.config.AuthenticateUser(username, pw)
 	if user == nil {
-		respondError(w, http.StatusUnauthorized, "Invalid username or password")
+		respondProblem(w, http.StatusUnauthorized, "Invalid username or password")
 		return
 	}
 	username = user.Username
@@ -134,7 +134,7 @@ func (s *Server) jfAuthenticateByName(w http.ResponseWriter, r *http.Request) {
 	})
 	tokenString, err := token.SignedString([]byte(s.config.App.JWTSecret))
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to generate token")
+		respondProblem(w, http.StatusInternalServerError, "Failed to generate token")
 		return
 	}
 

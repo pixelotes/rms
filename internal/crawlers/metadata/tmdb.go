@@ -161,8 +161,8 @@ func (t *TMDBClient) SearchTVShow(title string, year int) (*TVShowResult, error)
 		Networks []struct {
 			Name string `json:"name"`
 		} `json:"networks"`
-		Status       string `json:"status"`
-		NumberOfSeasons int `json:"number_of_seasons"`
+		Status          string `json:"status"`
+		NumberOfSeasons int    `json:"number_of_seasons"`
 	}
 
 	path := fmt.Sprintf("/tv/%d", r.ID)

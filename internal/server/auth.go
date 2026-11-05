@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/gorilla/mux"
 	"net/http"
 	"strings"
 	"time"
@@ -141,47 +142,85 @@ func (s *Server) jwtMiddleware(next http.Handler) http.Handler {
 
 // --- Jellyfin-Compatible Auth ---
 
+// tokenFromRequest returns the Jellyfin access token carried by a request:
+// X-Emby-Token / X-MediaBrowser-Token, "Authorization: MediaBrowser ...,
+// Token=..." (or its legacy name X-Emby-Authorization, still sent by the Kodi
+// addon, Yatse and jellyfin-web < 10.8), or the api_key query parameter.
+func tokenFromRequest(r *http.Request) string {
+	if t := r.Header.Get("X-Emby-Token"); t != "" {
+		return t
+	}
+	if t := r.Header.Get("X-MediaBrowser-Token"); t != "" {
+		return t
+	}
+	for _, h := range []string{"Authorization", "X-Emby-Authorization"} {
+		if t := tokenFromMediaBrowserHeader(r.Header.Get(h)); t != "" {
+			return t
+		}
+	}
+	return r.URL.Query().Get("api_key")
+}
+
 func (s *Server) jellyfinAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tokenStr := ""
-
-		if t := r.Header.Get("X-Emby-Token"); t != "" {
-			tokenStr = t
-		} else if t := r.Header.Get("X-MediaBrowser-Token"); t != "" {
-			tokenStr = t
-		}
-
+		tokenStr := tokenFromRequest(r)
 		if tokenStr == "" {
-			auth := r.Header.Get("Authorization")
-			if strings.HasPrefix(auth, "MediaBrowser ") {
-				for _, part := range strings.Split(auth[len("MediaBrowser "):], ",") {
-					part = strings.TrimSpace(part)
-					if strings.HasPrefix(part, "Token=") {
-						tokenStr = strings.Trim(strings.TrimPrefix(part, "Token="), "\"")
-						break
-					}
-				}
-			}
-		}
-
-		if tokenStr == "" {
-			tokenStr = r.URL.Query().Get("api_key")
-		}
-
-		if tokenStr == "" {
-			respondError(w, http.StatusUnauthorized, "Unauthorized")
+			w.WriteHeader(http.StatusUnauthorized) // spec: 401 has no body
 			return
 		}
 
 		username := s.parseToken(tokenStr)
 		if username == "" {
-			respondError(w, http.StatusUnauthorized, "Invalid or expired token")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		// RMS derives the acting user from the token only. A request that
+		// names a different user (query ?userId= or the legacy /Users/{userId}
+		// path) would otherwise silently receive the caller's own data, so it
+		// is refused instead. Mismatched IDs are compared GUID-insensitively
+		// (clients may drop the dashes).
+		if requested := requestedUserID(r); requested != "" && !sameGUID(requested, stableUserID(username)) {
+			w.WriteHeader(http.StatusForbidden) // spec: 403 has no body
 			return
 		}
 
 		ctx := context.WithValue(r.Context(), contextKeyUser, username)
+		ctx = context.WithValue(ctx, contextKeyDevice{}, s.sessions.touch(r, username))
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// requestedUserID returns the user id named by the request, from the query
+// string or the route, or "" when none is given.
+func requestedUserID(r *http.Request) string {
+	for _, name := range []string{"userId", "UserId", "userid"} {
+		if v := r.URL.Query().Get(name); v != "" {
+			return v
+		}
+	}
+	return mux.Vars(r)["userId"]
+}
+
+// sameGUID compares two GUID strings ignoring case and dashes.
+func sameGUID(a, b string) bool {
+	norm := func(s string) string { return strings.ToLower(strings.ReplaceAll(s, "-", "")) }
+	return norm(a) == norm(b)
+}
+
+// tokenFromMediaBrowserHeader extracts Token="..." from a
+// `MediaBrowser Client="x", Device="y", Token="z"` header value.
+func tokenFromMediaBrowserHeader(value string) string {
+	if len(value) < len("MediaBrowser ") || !strings.EqualFold(value[:len("MediaBrowser ")], "MediaBrowser ") {
+		return ""
+	}
+	for _, part := range strings.Split(value[len("MediaBrowser "):], ",") {
+		part = strings.TrimSpace(part)
+		if len(part) > 6 && strings.EqualFold(part[:6], "Token=") {
+			return strings.Trim(part[6:], "\"")
+		}
+	}
+	return ""
 }
 
 // parseToken validates a JWT and returns the username, or "" if invalid.

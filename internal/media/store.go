@@ -1,8 +1,8 @@
 package media
 
 import (
-	"fmt"
 	"crypto/sha256"
+	"fmt"
 	"os"
 	"strings"
 	"sync"

@@ -8,7 +8,10 @@ app:
   # Optional: enable on-disk remux cache so subsequent plays of remuxed files
   # are served via http.ServeFile and support seek/Range. First play still
   # streams live (no seek); the cache builds in the background and is used on
-  # later plays. Unset cache_path to disable. Default cache_max_gb is 10.
+  # later plays. The same folder stores resized poster variants
+  # (<cache_path>/images) when clients ask for maxWidth/maxHeight/format, so a
+  # TV client gets a 300px thumbnail once instead of the full poster every time.
+  # Unset cache_path to disable both. Default cache_max_gb is 10.
   # cache_path: "./cache"
   # cache_max_gb: 10
   debug: false
@@ -28,8 +31,16 @@ app:
   # webhook_token: "${RMS_WEBHOOK_TOKEN}"
 
 player:
-  # Strategies tried in order when playing video. Remove "transcode" on low-power devices.
-  stream_strategy: ["direct", "remux", "transcode"]
+  # Strategies tried in order when playing video. Default: ["direct", "remux"].
+  # "remux" copies the video stream (cheap); "transcode" re-encodes with ffmpeg
+  # and saturates a Raspberry Pi 3B, so it is OFF unless you list it here.
+  # When "transcode" is enabled, Jellyfin clients are also offered a progressive
+  # H.264/AAC MP4 transcode (TranscodingUrl) as a last resort.
+  stream_strategy: ["direct", "remux"]
+  # stream_strategy: ["direct", "remux", "transcode"]   # Pi 5 / x86 only
+  # Max simultaneous ffmpeg processes (remux/transcode). Extra requests get a
+  # 503 instead of saturating the CPU. Default 1; raise on a Pi 5 / x86.
+  max_ffmpeg_processes: 1
 
 libraries:
   - friendly_name: "Movies"

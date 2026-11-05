@@ -161,6 +161,7 @@ func (s *Server) rescanLibraries() {
 		s.syncQueue.RecordAdded(added)
 		s.syncQueue.RecordRemoved(removed)
 	}
+	s.notifyLibraryChanged(added, removed)
 	s.refreshTVChannels()
 }
 

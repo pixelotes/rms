@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"raspberry-media-server/internal/config"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,22 +17,37 @@ import (
 
 // --- Views (Libraries) ---
 
+// jfCollectionType maps a library content_type to a Jellyfin CollectionType
+// enum value (movies | tvshows | livetv).
+func jfCollectionType(contentType string) string {
+	switch contentType {
+	case "tvseries", "anime":
+		return "tvshows"
+	case "tv":
+		return "livetv"
+	default:
+		return "movies"
+	}
+}
+
+// libraryViewItem builds the CollectionFolder BaseItemDto for a library.
+func (s *Server) libraryViewItem(lib config.Library, id string) map[string]interface{} {
+	return map[string]interface{}{
+		"Name":           lib.FriendlyName,
+		"SortName":       lib.FriendlyName,
+		"Id":             id,
+		"Type":           "CollectionFolder",
+		"CollectionType": jfCollectionType(lib.ContentType),
+		"IsFolder":       true,
+		"ImageTags":      map[string]string{},
+	}
+}
+
 func (s *Server) jfGetViews(w http.ResponseWriter, r *http.Request) {
 	libs := s.librariesForRequest(r)
 	items := make([]map[string]interface{}, 0, len(libs))
 	for i, lib := range libs {
-		collectionType := "movies"
-		if lib.ContentType == "tvseries" || lib.ContentType == "anime" {
-			collectionType = "tvshows"
-		}
-		items = append(items, map[string]interface{}{
-			"Name":           lib.FriendlyName,
-			"Id":             libraryID(i),
-			"Type":           "CollectionFolder",
-			"CollectionType": collectionType,
-			"IsFolder":       true,
-			"ImageTags":      map[string]string{},
-		})
+		items = append(items, s.libraryViewItem(lib, libraryID(i)))
 	}
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{
@@ -47,7 +63,6 @@ func (s *Server) jfGetItems(w http.ResponseWriter, r *http.Request) {
 	libs := s.librariesForRequest(r)
 	parentID := queryParam(r, "parentId", "ParentId")
 	includeTypes := queryParam(r, "includeItemTypes", "IncludeItemTypes")
-	sortBy := queryParam(r, "sortBy", "SortBy")
 	limit, _ := strconv.Atoi(queryParam(r, "limit", "Limit"))
 	startIndex, _ := strconv.Atoi(queryParam(r, "startIndex", "StartIndex"))
 	searchTerm := queryParam(r, "searchTerm", "SearchTerm")
@@ -82,23 +97,38 @@ func (s *Server) jfGetItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine which directory to browse
-	dir, libIndex := s.resolveJellyfinParent(parentID, libs)
-	if dir == "" {
-		respondJSON(w, http.StatusOK, map[string]interface{}{
-			"Items":            []interface{}{},
-			"StartIndex":       0,
-			"TotalRecordCount": 0,
-		})
-		return
-	}
-
 	allItems := make([]map[string]interface{}, 0)
 
-	if recursive {
-		allItems = s.collectItemsRecursive(dir, libIndex, includeTypes, searchTerm, libs)
+	if parentID == "" {
+		// No parentId: Jellyfin treats the user's root folder as the parent.
+		// Non-recursive -> the library views; recursive -> every item across
+		// all (non Live TV) libraries.
+		for i, lib := range libs {
+			if lib.ContentType == "tv" {
+				continue
+			}
+			if recursive {
+				allItems = append(allItems, s.collectItemsRecursive(lib.Path, i, includeTypes, searchTerm, libs)...)
+			} else if includeTypes == "" || strings.Contains(includeTypes, "CollectionFolder") {
+				allItems = append(allItems, s.libraryViewItem(lib, libraryID(i)))
+			}
+		}
 	} else {
-		allItems = s.collectItems(dir, libIndex, includeTypes, libs)
+		// Determine which directory to browse
+		dir, libIndex := s.resolveJellyfinParent(parentID, libs)
+		if dir == "" {
+			respondJSON(w, http.StatusOK, map[string]interface{}{
+				"Items":            []interface{}{},
+				"StartIndex":       0,
+				"TotalRecordCount": 0,
+			})
+			return
+		}
+		if recursive {
+			allItems = s.collectItemsRecursive(dir, libIndex, includeTypes, searchTerm, libs)
+		} else {
+			allItems = s.collectItems(dir, libIndex, includeTypes, libs)
+		}
 	}
 
 	// Search filter
@@ -114,51 +144,22 @@ func (s *Server) jfGetItems(w http.ResponseWriter, r *http.Request) {
 		allItems = filtered
 	}
 
-	// Sort
-	if sortBy == "SortName" || sortBy == "Name" || sortBy == "" {
-		sort.Slice(allItems, func(i, j int) bool {
-			a, _ := allItems[i]["SortName"].(string)
-			b, _ := allItems[j]["SortName"].(string)
-			return strings.ToLower(a) < strings.ToLower(b)
-		})
-	} else if sortBy == "ProductionYear,SortName" || sortBy == "ProductionYear" {
-		sort.Slice(allItems, func(i, j int) bool {
-			ya, _ := allItems[i]["ProductionYear"].(int)
-			yb, _ := allItems[j]["ProductionYear"].(int)
-			if ya != yb {
-				return ya > yb // Newest first
-			}
-			a, _ := allItems[i]["SortName"].(string)
-			b, _ := allItems[j]["SortName"].(string)
-			return strings.ToLower(a) < strings.ToLower(b)
-		})
-	}
-
-	// User data filters
-	if f := queryParam(r, "filters", "Filters"); f != "" {
-		userID := stableUserID(usernameFromContext(r))
-		filtered := make([]map[string]interface{}, 0, len(allItems))
-		for _, item := range allItems {
-			id, _ := item["Id"].(string)
-			keep := true
-			if strings.Contains(f, "IsResumable") && !s.userData.IsResumable(userID, id) {
-				keep = false
-			}
-			if strings.Contains(f, "IsFavorite") && !s.userData.IsFavorite(userID, id) {
-				keep = false
-			}
-			if keep {
-				filtered = append(filtered, item)
-			}
-		}
-		allItems = filtered
-	}
+	// Filters (excludeItemTypes, genres, years, isFavorite/isPlayed, filters,
+	// nameStartsWith*, minCommunityRating) and ItemSortBy/SortOrder ordering.
+	userID := stableUserID(usernameFromContext(r))
+	q := parseItemQuery(r)
+	allItems = s.filterItems(allItems, q, userID)
+	s.sortItems(allItems, q, userID)
 
 	total := len(allItems)
 
 	// Pagination
-	if startIndex > 0 && startIndex < len(allItems) {
-		allItems = allItems[startIndex:]
+	if startIndex > 0 {
+		if startIndex < len(allItems) {
+			allItems = allItems[startIndex:]
+		} else {
+			allItems = allItems[:0]
+		}
 	}
 	if limit > 0 && limit < len(allItems) {
 		allItems = allItems[:limit]
@@ -178,10 +179,7 @@ func (s *Server) jfGetItem(w http.ResponseWriter, r *http.Request) {
 
 	if idx, ok := s.parseLibraryID(itemID, libs); ok {
 		lib := libs[idx]
-		collectionType := "movies"
-		if lib.ContentType == "tvseries" || lib.ContentType == "anime" {
-			collectionType = "tvshows"
-		}
+		collectionType := jfCollectionType(lib.ContentType)
 		respondJSON(w, http.StatusOK, map[string]interface{}{
 			"Name":           lib.FriendlyName,
 			"Id":             itemID,
@@ -195,11 +193,11 @@ func (s *Server) jfGetItem(w http.ResponseWriter, r *http.Request) {
 	// TV channel.
 	if ch, ok := tv.LookupChannel(itemID); ok {
 		if !s.tvLibraryVisible(ch.LibKey, r) {
-			respondError(w, http.StatusNotFound, "Item not found")
+			respondProblem(w, http.StatusNotFound, "Item not found")
 			return
 		}
 		item := channelItem(ch)
-		item["MediaSources"] = []map[string]interface{}{channelMediaSource(ch)}
+		item["MediaSources"] = []map[string]interface{}{s.channelMediaSource(ch)}
 		item["UserData"] = s.userData.Get(stableUserID(usernameFromContext(r)), ch.ID)
 		respondJSON(w, http.StatusOK, item)
 		return
@@ -207,23 +205,34 @@ func (s *Server) jfGetItem(w http.ResponseWriter, r *http.Request) {
 
 	path, err := media.ItemPath(itemID)
 	if err != nil {
-		respondError(w, http.StatusNotFound, "Item not found")
+		respondProblem(w, http.StatusNotFound, "Item not found")
 		return
 	}
 
 	if !media.IsPathAllowed(path, libs) {
-		respondError(w, http.StatusForbidden, "Access denied")
+		respondProblem(w, http.StatusForbidden, "Access denied")
 		return
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
-		respondError(w, http.StatusNotFound, "Item not found")
+		respondProblem(w, http.StatusNotFound, "Item not found")
 		return
 	}
 
 	libIdx := findLibraryIndex(path, libs)
 	item := s.buildJellyfinItem(path, info, libIdx, libs)
+	// Single-item fetches precede playback decisions: replace the listing's
+	// cache-only MediaSources with a real (cached) ffprobe result.
+	if _, ok := item["MediaSources"]; ok {
+		videoPath := path
+		if info.IsDir() {
+			videoPath = media.FindVideoFile(path)
+		}
+		if videoPath != "" {
+			item["MediaSources"] = s.buildMediaSources(videoPath, true, "")
+		}
+	}
 	item["UserData"] = s.userData.Get(stableUserID(usernameFromContext(r)), item["Id"].(string))
 	respondJSON(w, http.StatusOK, item)
 }
@@ -239,17 +248,17 @@ func (s *Server) jfGetAncestors(w http.ResponseWriter, r *http.Request) {
 
 	path, err := media.ItemPath(itemID)
 	if err != nil {
-		respondJSON(w, http.StatusOK, []interface{}{})
+		respondProblem(w, http.StatusNotFound, "Item not found")
 		return
 	}
 	if !media.IsPathAllowed(path, libs) {
-		respondError(w, http.StatusForbidden, "Access denied")
+		respondProblem(w, http.StatusForbidden, "Access denied")
 		return
 	}
 
 	libIdx := findLibraryIndex(path, libs)
 	if libIdx < 0 {
-		respondJSON(w, http.StatusOK, []interface{}{})
+		respondProblem(w, http.StatusNotFound, "Item not found")
 		return
 	}
 	libPath, _ := filepath.Abs(libs[libIdx].Path)
@@ -292,7 +301,7 @@ func (s *Server) jfGetItemImage(w http.ResponseWriter, r *http.Request) {
 	// <img>, so cross-origin is fine — no proxy needed here).
 	if ch, ok := tv.LookupChannel(itemID); ok {
 		if ch.Logo == "" {
-			http.NotFound(w, r)
+			respondProblem(w, http.StatusNotFound, "Image not found")
 			return
 		}
 		http.Redirect(w, r, ch.Logo, http.StatusFound)
@@ -306,12 +315,12 @@ func (s *Server) jfGetItemImage(w http.ResponseWriter, r *http.Request) {
 	} else {
 		path, err := media.ItemPath(itemID)
 		if err != nil {
-			http.NotFound(w, r)
+			respondProblem(w, http.StatusNotFound, "Image not found")
 			return
 		}
 		info, err := os.Stat(path)
 		if err != nil {
-			http.NotFound(w, r)
+			respondProblem(w, http.StatusNotFound, "Image not found")
 			return
 		}
 		if info.IsDir() {
@@ -327,8 +336,14 @@ func (s *Server) jfGetItemImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if imgPath == "" {
-		http.NotFound(w, r)
+		respondProblem(w, http.StatusNotFound, "Image not found")
 		return
+	}
+
+	// Honour maxWidth/maxHeight/quality/format with a cached ffmpeg-resized
+	// variant when app.cache_path is set; otherwise serve the original.
+	if variant := s.imageVariant(r, imgPath); variant != "" {
+		imgPath = variant
 	}
 
 	w.Header().Set("Cache-Control", "public, max-age=86400")
@@ -436,10 +451,30 @@ func (s *Server) jfGetFilters(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Sort(sort.Reverse(sort.IntSlice(yearList)))
 
+	// /Items/Filters2 -> QueryFilters (Genres as NameGuidPair[]);
+	// /Items/Filters  -> QueryFiltersLegacy (Genres as string[], plus Years).
+	if strings.HasSuffix(r.URL.Path, "/Filters2") {
+		genrePairs := make([]map[string]interface{}, 0, len(genreList))
+		for _, g := range genreList {
+			genrePairs = append(genrePairs, map[string]interface{}{"Name": g, "Id": stableID("genre-" + g)})
+		}
+		filters := map[string]interface{}{
+			"Genres": genrePairs,
+			"Tags":   []string{},
+		}
+		if s.jfVersionAtLeast(12, 0) {
+			// Added to QueryFilters in Jellyfin 12.0.
+			filters["AudioLanguages"] = []string{}
+			filters["SubtitleLanguages"] = []string{}
+		}
+		respondJSON(w, http.StatusOK, filters)
+		return
+	}
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"Genres": genreList,
-		"Years":  yearList,
-		"Tags":   []string{},
+		"Genres":          genreList,
+		"Tags":            []string{},
+		"OfficialRatings": []string{},
+		"Years":           yearList,
 	})
 }
 
@@ -472,18 +507,36 @@ func (s *Server) jfSearchHints(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			hint := map[string]interface{}{
-				"Id":           item["Id"],
-				"Name":         name,
-				"Type":         item["Type"],
-				"IsFolder":     item["IsFolder"],
-				"MediaType":    item["MediaType"],
-				"RunTimeTicks": item["RunTimeTicks"],
+				"ItemId":      item["Id"],
+				"Id":          item["Id"],
+				"Name":        name,
+				"MatchedTerm": name,
+				"Type":        item["Type"],
+				"IsFolder":    item["IsFolder"],
+			}
+			if mt, ok := item["MediaType"]; ok {
+				hint["MediaType"] = mt
+			}
+			if ticks, ok := item["RunTimeTicks"]; ok {
+				hint["RunTimeTicks"] = ticks
 			}
 			if year, ok := item["ProductionYear"]; ok {
 				hint["ProductionYear"] = year
 			}
-			if img, ok := item["ImageTags"]; ok {
-				hint["ImageTags"] = img
+			if n, ok := item["IndexNumber"]; ok {
+				hint["IndexNumber"] = n
+			}
+			if n, ok := item["ParentIndexNumber"]; ok {
+				hint["ParentIndexNumber"] = n
+			}
+			if series, ok := item["SeriesName"]; ok {
+				hint["Series"] = series
+			}
+			// SearchHint has no ImageTags; it carries PrimaryImageTag instead.
+			if tags, ok := item["ImageTags"].(map[string]string); ok {
+				if tag, ok := tags["Primary"]; ok {
+					hint["PrimaryImageTag"] = tag
+				}
 			}
 			hints = append(hints, hint)
 			if len(hints) >= limit {

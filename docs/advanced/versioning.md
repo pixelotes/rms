@@ -60,4 +60,5 @@ All core functionality:
 
 Reference specs are stored in `specs/` for comparison:
 
-- `specs/jellyfin-openapi-10.11.8.json` — Jellyfin 10.11 full API spec
+- `specs/jellyfin-openapi-10.11.8.json`, `specs/jellyfin-openapi-10.11.9.json` — Jellyfin 10.11 full API spec
+- `specs/jellyfin-openapi-12.0.json` — Jellyfin 12.0 full API spec (stable)

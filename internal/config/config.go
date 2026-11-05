@@ -77,7 +77,28 @@ type AppConfig struct {
 }
 
 type PlayerConfig struct {
+	// StreamStrategy lists the playback strategies the server may use, in
+	// fallback order. "direct" is always allowed. "remux" and "transcode"
+	// spawn ffmpeg; "transcode" is CPU-heavy and is OFF unless listed here.
 	StreamStrategy []string `yaml:"stream_strategy"`
+	// MaxFFmpegProcesses caps how many ffmpeg remux/transcode processes may
+	// run at once. Extra requests get 503 instead of fighting for the CPU.
+	// Default 1 (a Raspberry Pi 3B cannot sustain more).
+	MaxFFmpegProcesses int `yaml:"max_ffmpeg_processes"`
+}
+
+// AllowsStrategy reports whether a streaming strategy is enabled in config.
+// "direct" is always allowed; anything else must be listed in stream_strategy.
+func (p PlayerConfig) AllowsStrategy(name string) bool {
+	if name == "direct" {
+		return true
+	}
+	for _, s := range p.StreamStrategy {
+		if s == name {
+			return true
+		}
+	}
+	return false
 }
 
 type Library struct {
@@ -174,7 +195,12 @@ func (c *Config) setDefaults() {
 		c.App.JellyfinVersion = "10.11.0"
 	}
 	if len(c.Player.StreamStrategy) == 0 {
-		c.Player.StreamStrategy = []string{"direct", "remux", "transcode"}
+		// Transcoding is opt-in: it saturates a Raspberry Pi 3B, so the
+		// default only allows direct play and (stream-copy) remux.
+		c.Player.StreamStrategy = []string{"direct", "remux"}
+	}
+	if c.Player.MaxFFmpegProcesses <= 0 {
+		c.Player.MaxFFmpegProcesses = 1
 	}
 	if c.Crawlers.AutoScan.IntervalHours == 0 {
 		c.Crawlers.AutoScan.IntervalHours = 24

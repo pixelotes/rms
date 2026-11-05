@@ -57,12 +57,20 @@ playable on any recent device. Transcode exists as a last resort.
 ```yaml
 player:
   stream_strategy:
-    - direct      # Always try first
+    - direct      # Always try first (always allowed)
     - remux       # Fallback: fixes container issues, preserves video quality
-    - transcode   # Last resort: remove on Pi 3B to avoid CPU saturation
+    # - transcode # Opt-in last resort: saturates a Pi 3B, fine on Pi 5 / x86
 ```
 
-On a Raspberry Pi 3B, the recommended config is `[direct, remux]`.  
+**Transcoding is opt-in and off by default** (2026-09-08). The default list is
+`[direct, remux]`. The server enforces the list: a `?strategy=transcode` request on
+the native API degrades to direct play unless `transcode` is configured, and the
+Jellyfin `MediaSourceInfo` only advertises `SupportsTranscoding=true` plus a
+progressive (`TranscodingSubProtocol: http`) H.264/AAC MP4 `TranscodingUrl` when it
+is. Without it, clients see `SupportsTranscoding=false` and never attempt one.
+Trickplay thumbnails are not generated under any configuration.
+
+On a Raspberry Pi 3B, keep the default `[direct, remux]`.  
 On a Pi 5 or x86, `[direct, remux, transcode]` is fine.
 
 ## Consequences
@@ -79,7 +87,8 @@ On a Pi 5 or x86, `[direct, remux, transcode]` is fine.
 - Transcode has no seek support on first play (live pipe, no `Content-Length`)
 - No adaptive bitrate: the client gets one fixed resolution/bitrate
 - No subtitle burning
-- No transcode queue: concurrent transcode requests compete for the same CPU
+- No transcode queue: `player.max_ffmpeg_processes` (default 1) caps concurrent
+  remux/transcode processes and answers 503 beyond it, but there is no waiting queue
 
 ## References
 

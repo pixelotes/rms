@@ -17,7 +17,7 @@ Jellyfin uses ~200 MB of RAM idle. RMS uses ~9 MB. Same libraries, same apps, 23
 ## Features
 
 - **Jellyfin-compatible API** — works with Streamyfin, Kodi (Jellyfin plugin), and other Jellyfin clients
-- **Direct play** with remux and transcode fallback (FFmpeg)
+- **Direct play** with remux fallback (FFmpeg); transcode is opt-in and off by default (too heavy for a Pi 3B)
 - **Web UI** — browse libraries, view metadata/artwork, play videos, manage subtitles (optional, toggleable)
 - **NFO + artwork** — reads Kodi-standard NFO files, posters, backdrops, logos, episode thumbnails
 - **Subtitles** — SRT to WebVTT conversion on the fly, multi-language support
@@ -70,7 +70,7 @@ app:
   jellyfin_version: "10.10.7"
 
 player:
-  stream_strategy: ["direct", "remux", "transcode"]
+  stream_strategy: ["direct", "remux"]   # add "transcode" only on Pi 5 / x86
 
 libraries:
   - friendly_name: "Movies"

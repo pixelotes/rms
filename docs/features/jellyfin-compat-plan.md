@@ -17,6 +17,8 @@ full Jellyfin database.
 - API specs available locally:
   - `specs/jellyfin-openapi-10.10.7.json`
   - `specs/jellyfin-openapi-10.11.8.json`
+  - `specs/jellyfin-openapi-10.11.9.json`
+  - `specs/jellyfin-openapi-12.0.json`
 
 ## Quick Wins
 
@@ -89,7 +91,9 @@ These need real behavior or can mislead clients if stubbed too aggressively:
 - Findroid playback follow-up:
   - Playback is now advertised as direct play/direct stream only
     (`SupportsTranscoding=false`) to avoid clients choosing missing HLS
-    transcoding routes.
+    transcoding routes. Since 2026-09-08, listing `transcode` in
+    `player.stream_strategy` flips this to `true` and advertises a progressive
+    MP4 `TranscodingUrl`; it stays off by default (Pi 3B).
   - `PlaybackInfo` now includes `ErrorCode`, a stable `PlaySessionId`,
     default audio/subtitle stream indexes, bitrate, empty required headers,
     `PlaySessionId` on the media source, and an extension-bearing

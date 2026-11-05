@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,9 +21,14 @@ type Server struct {
 	config      *config.Config
 	httpServer  *http.Server
 	router      *mux.Router
+	handler     http.Handler // router wrapped with Jellyfin request-compat rewrites
+	routeIndex  map[int][]routeTemplate
+	wsHub       *wsHub // Jellyfin /socket connections
+	sessions    *sessionStore
 	userData    *UserDataStore
 	syncQueue   *SyncQueueStore
 	streamCache *streamCache
+	ffmpegSlots chan struct{} // bounded by player.max_ffmpeg_processes
 
 	// webhook debounce (Paso 2)
 	rescanMu    sync.Mutex
@@ -33,14 +40,19 @@ func New(cfg *config.Config) *Server {
 	s.userData = NewUserDataStore(cfg.App.UserdataPath)
 	s.syncQueue = NewSyncQueueStore()
 	s.streamCache = newStreamCache(cfg.App.CachePath, cfg.App.CacheMaxGB)
+	s.wsHub = newWSHub()
+	s.sessions = newSessionStore()
+	s.ffmpegSlots = make(chan struct{}, cfg.Player.MaxFFmpegProcesses)
 	s.router = mux.NewRouter()
 	if cfg.App.Debug {
 		s.router.Use(loggingMiddleware)
 	}
 	s.registerRoutes()
+	s.buildRouteIndex()
+	s.handler = s.compatHandler(s.router)
 	s.httpServer = &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.App.Port),
-		Handler:      s.router,
+		Handler:      s.handler,
 		ReadTimeout:  0, // No timeout for streaming
 		WriteTimeout: 0, // No timeout for streaming
 		IdleTimeout:  120 * time.Second,
@@ -103,26 +115,24 @@ func (s *Server) registerRoutes() {
 
 	// Jellyfin public endpoints
 	jf.HandleFunc("/System/Info/Public", s.jfSystemInfoPublic).Methods("GET")
-	jf.HandleFunc("/system/info/public", s.jfSystemInfoPublic).Methods("GET")
 	jf.HandleFunc("/Users/Public", s.jfUsersPublic).Methods("GET")
 	jf.HandleFunc("/Users/AuthenticateByName", s.jfAuthenticateByName).Methods("POST")
 	jf.HandleFunc("/Branding/Configuration", s.jfBrandingConfig).Methods("GET")
 	jf.HandleFunc("/Branding/Css", s.jfBrandingCSS).Methods("GET")
 	jf.HandleFunc("/Branding/Css.css", s.jfBrandingCSS).Methods("GET")
-	jf.HandleFunc("/Branding/Splashscreen", s.jfNotFound).Methods("GET", "POST", "DELETE")
+	jf.HandleFunc("/GetUtcTime", s.jfGetUtcTime).Methods("GET") // SyncPlay/time-sync ping from jellyfin-web
+	jf.HandleFunc("/Branding/Splashscreen", s.jfNotFound).Methods("GET")
+	jf.HandleFunc("/Branding/Splashscreen", s.jfSessionStub).Methods("POST", "DELETE")
 	jf.HandleFunc("/QuickConnect/Enabled", s.jfQuickConnectEnabled).Methods("GET")
 	jf.HandleFunc("/QuickConnect/Initiate", s.jfQuickConnectInitiate).Methods("POST", "GET")
-	jf.HandleFunc("/QuickConnect/Authorize", s.jfQuickConnectUnavailable).Methods("POST")
-	jf.HandleFunc("/QuickConnect/Connect", s.jfQuickConnectUnavailable).Methods("GET")
+	jf.HandleFunc("/QuickConnect/Authorize", s.jfQuickConnectAuthorize).Methods("POST")
+	jf.HandleFunc("/QuickConnect/Connect", s.jfQuickConnectConnect).Methods("GET")
 
 	// Images - public (clients load these as direct URLs without auth headers)
 	// Some clients use lowercase "/items/" so register both variants.
 	jf.HandleFunc("/Items/{itemId}/Images/{imageType}", s.jfGetItemImage).Methods("GET", "HEAD")
 	jf.HandleFunc("/Items/{itemId}/Images/{imageType}/{imageIndex}", s.jfGetItemImage).Methods("GET", "HEAD")
 	jf.HandleFunc("/Items/{itemId}/Images/{imageType}/{imageIndex}/{tag}/{format}/{maxWidth}/{maxHeight}/{percentPlayed}/{unplayedCount}", s.jfGetItemImage).Methods("GET", "HEAD")
-	jf.HandleFunc("/items/{itemId}/Images/{imageType}", s.jfGetItemImage).Methods("GET", "HEAD")
-	jf.HandleFunc("/items/{itemId}/Images/{imageType}/{imageIndex}", s.jfGetItemImage).Methods("GET", "HEAD")
-	jf.HandleFunc("/items/{itemId}/Images/{imageType}/{imageIndex}/{tag}/{format}/{maxWidth}/{maxHeight}/{percentPlayed}/{unplayedCount}", s.jfGetItemImage).Methods("GET", "HEAD")
 
 	// Streaming - public (media players like ExoPlayer/AVPlayer use bare URLs without auth headers)
 	jf.HandleFunc("/Videos/{itemId}/stream", s.jfVideoStream).Methods("GET", "HEAD")
@@ -137,9 +147,8 @@ func (s *Server) registerRoutes() {
 	jfAuth := s.router.PathPrefix("").Subrouter()
 	jfAuth.Use(s.jellyfinAuthMiddleware)
 
-	// System (register both cases — some clients use lowercase)
+	// System (any casing is accepted, see compatHandler)
 	jfAuth.HandleFunc("/System/Info", s.jfSystemInfo).Methods("GET")
-	jfAuth.HandleFunc("/system/info", s.jfSystemInfo).Methods("GET")
 	jfAuth.HandleFunc("/System/Endpoint", s.jfSystemEndpoint).Methods("GET")
 	jfAuth.HandleFunc("/System/Ping", s.jfSystemPing).Methods("GET", "POST")
 	jfAuth.HandleFunc("/System/ActivityLog/Entries", s.jfEmptyItems).Methods("GET")
@@ -161,9 +170,18 @@ func (s *Server) registerRoutes() {
 
 	// Users & Items
 	jfAuth.HandleFunc("/Users", s.jfGetUsers).Methods("GET")
-	jfAuth.HandleFunc("/Users", s.jfGetCurrentUser).Methods("POST")
+	jfAuth.HandleFunc("/Users", s.jfSessionStub).Methods("POST")
 	jfAuth.HandleFunc("/UserViews", s.jfGetViews).Methods("GET")
 	jfAuth.HandleFunc("/UserViews/GroupingOptions", s.jfGroupingOptions).Methods("GET")
+	// User avatars: RMS has none (UserDto carries no PrimaryImageTag).
+	jfAuth.HandleFunc("/UserImage", s.jfNotFound).Methods("GET", "HEAD")
+	jfAuth.HandleFunc("/UserImage", s.jfSessionStub).Methods("POST", "DELETE")
+	// Subtitle fallback fonts (jellyfin-web ASS renderer): none served.
+	jfAuth.HandleFunc("/FallbackFont/Fonts", s.jfEmptyArray).Methods("GET")
+	jfAuth.HandleFunc("/FallbackFont/Fonts/{name}", s.jfNotFound).Methods("GET")
+	// Years index used by jellyfin-web filter dialogs.
+	jfAuth.HandleFunc("/Years", s.jfEmptyItems).Methods("GET")
+	jfAuth.HandleFunc("/Years/{year}", s.jfNotFound).Methods("GET")
 	jfAuth.HandleFunc("/Users/{userId}/Views", s.jfGetViews).Methods("GET")
 	jfAuth.HandleFunc("/Users/{userId}/Items/Latest", s.jfGetLatest).Methods("GET")
 	jfAuth.HandleFunc("/Users/{userId}/Items/Resume", s.jfGetResumeItems).Methods("GET")
@@ -176,7 +194,7 @@ func (s *Server) registerRoutes() {
 	jfAuth.HandleFunc("/Users/{userId}", s.jfGetUser).Methods("GET")
 	jfAuth.HandleFunc("/Users/{userId}", s.jfSessionStub).Methods("DELETE")
 	jfAuth.HandleFunc("/Users/{userId}/Policy", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Users/AuthenticateWithQuickConnect", s.jfQuickConnectUnavailable).Methods("POST")
+	jfAuth.HandleFunc("/Users/AuthenticateWithQuickConnect", s.jfAuthenticateWithQuickConnect).Methods("POST")
 	jfAuth.HandleFunc("/Users/Configuration", s.jfSessionStub).Methods("POST")
 	jfAuth.HandleFunc("/Users/ForgotPassword", s.jfForgotPassword).Methods("POST")
 	jfAuth.HandleFunc("/Users/ForgotPassword/Pin", s.jfForgotPasswordPin).Methods("POST")
@@ -256,18 +274,19 @@ func (s *Server) registerRoutes() {
 	jfAuth.HandleFunc("/Playback/BitrateTest", s.jfBitrateTest).Methods("GET")
 
 	// Sessions
-	jfAuth.HandleFunc("/Sessions", s.jfSessionsStub).Methods("GET")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/Command", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/Command/{command}", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/Message", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/Playing", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/Playing/{command}", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/{sessionId}/System/{command}", s.jfSessionStub).Methods("POST")
+	jfAuth.HandleFunc("/Sessions", s.jfSessions).Methods("GET")
+	// Remote control: forwarded over the target session's WebSocket.
+	jfAuth.HandleFunc("/Sessions/{sessionId}/Command", s.jfSessionCommand).Methods("POST")
+	jfAuth.HandleFunc("/Sessions/{sessionId}/Command/{command}", s.jfSessionCommand).Methods("POST")
+	jfAuth.HandleFunc("/Sessions/{sessionId}/Message", s.jfSessionMessage).Methods("POST")
+	jfAuth.HandleFunc("/Sessions/{sessionId}/Playing", s.jfSessionPlay).Methods("POST")
+	jfAuth.HandleFunc("/Sessions/{sessionId}/Playing/{command}", s.jfSessionPlaystate).Methods("POST")
+	jfAuth.HandleFunc("/Sessions/{sessionId}/System/{command}", s.jfSessionCommand).Methods("POST")
 	jfAuth.HandleFunc("/Sessions/{sessionId}/User/{userId}", s.jfSessionStub).Methods("POST", "DELETE")
 	jfAuth.HandleFunc("/Sessions/{sessionId}/Viewing", s.jfSessionStub).Methods("POST")
 	jfAuth.HandleFunc("/Sessions/Viewing", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/Capabilities", s.jfSessionStub).Methods("POST")
-	jfAuth.HandleFunc("/Sessions/Capabilities/Full", s.jfSessionStub).Methods("POST")
+	jfAuth.HandleFunc("/Sessions/Capabilities", s.jfSessionCapabilities).Methods("POST")
+	jfAuth.HandleFunc("/Sessions/Capabilities/Full", s.jfSessionCapabilities).Methods("POST")
 	jfAuth.HandleFunc("/Sessions/Playing", s.jfReportPlayback).Methods("POST")
 	jfAuth.HandleFunc("/Sessions/Playing/Progress", s.jfReportPlayback).Methods("POST")
 	jfAuth.HandleFunc("/Sessions/Playing/Stopped", s.jfReportPlaybackStopped).Methods("POST")
@@ -278,7 +297,7 @@ func (s *Server) registerRoutes() {
 		jfAuth.HandleFunc("/Sessions/Playing/ReportStart", s.jfReportPlayback).Methods("POST")
 		jfAuth.HandleFunc("/Sessions/Playing/ReportProgress", s.jfReportPlayback).Methods("POST")
 		jfAuth.HandleFunc("/Sessions/Playing/ReportStopped", s.jfReportPlaybackStopped).Methods("POST")
-		jfAuth.HandleFunc("/Sessions/Logout", s.jfSessionStub).Methods("DELETE", "POST")
+		jfAuth.HandleFunc("/Sessions/Logout", s.jfSessionLogout).Methods("DELETE", "POST")
 	}
 
 	// Client log stub (Moonfin sends crash reports here)
@@ -292,7 +311,7 @@ func (s *Server) registerRoutes() {
 	jfAuth.HandleFunc("/UserItems/{itemId}/UserData", s.jfUpdateUserData).Methods("POST")
 	jfAuth.HandleFunc("/Users/{userId}/Items/{itemId}/UserData", s.jfUserData).Methods("GET")
 	jfAuth.HandleFunc("/Users/{userId}/Items/{itemId}/UserData", s.jfUpdateUserData).Methods("POST")
-	jfAuth.HandleFunc("/UserItems/{itemId}/Rating", s.jfSessionStub).Methods("POST", "DELETE")
+	jfAuth.HandleFunc("/UserItems/{itemId}/Rating", s.jfUserItemRating).Methods("POST", "DELETE")
 	jfAuth.HandleFunc("/Users/{userId}/PlayedItems/{itemId}", s.jfTogglePlayed).Methods("POST", "DELETE")
 	jfAuth.HandleFunc("/Users/{userId}/FavoriteItems/{itemId}", s.jfToggleFavorite).Methods("POST", "DELETE")
 	jfAuth.HandleFunc("/UserPlayedItems/{itemId}", s.jfTogglePlayed).Methods("POST", "DELETE")
@@ -336,18 +355,21 @@ func (s *Server) registerRoutes() {
 
 	// LiveTv: channels are served from the M3U/IPTV channel store (ADR-015).
 	// EPG (Programs/Guide) and DVR remain unimplemented — empty stubs.
-	// Registered only when a content_type: "tv" library exists; otherwise the
-	// whole subsystem stays off and these paths 404 (feature absent).
-	if s.hasTVLibraries() {
-		jfAuth.HandleFunc("/LiveTv/Info", s.jfLiveTVInfo).Methods("GET")
-		jfAuth.HandleFunc("/LiveTv/Channels", s.jfLiveTvChannels).Methods("GET")
-		jfAuth.HandleFunc("/LiveTv/Channels/{channelId}", s.jfLiveTvChannel).Methods("GET")
-		jfAuth.HandleFunc("/LiveTv/Programs/Recommended", s.jfEmptyItems).Methods("GET")
-		jfAuth.HandleFunc("/LiveTv/Programs", s.jfEmptyItems).Methods("GET", "POST")
-		jfAuth.HandleFunc("/LiveTv/GuideInfo", s.jfEmptyObject).Methods("GET")
-		jfAuth.HandleFunc("/LiveStreams/Open", s.jfOpenLiveStream).Methods("POST")
-		jfAuth.HandleFunc("/LiveStreams/Close", s.jfCloseLiveStream).Methods("POST")
-	}
+	// Always registered: the spec documents 200 for these even when Live TV is
+	// off. Without a content_type: "tv" library the channel store stays empty,
+	// /LiveTv/Info reports IsEnabled=false and the lists come back empty; the
+	// channel store, refresh job and /tv/logo routes remain dormant (ADR-005).
+	jfAuth.HandleFunc("/LiveTv/Info", s.jfLiveTVInfo).Methods("GET")
+	jfAuth.HandleFunc("/LiveTv/Channels", s.jfLiveTvChannels).Methods("GET")
+	jfAuth.HandleFunc("/LiveTv/Channels/{channelId}", s.jfLiveTvChannel).Methods("GET")
+	jfAuth.HandleFunc("/LiveTv/Programs/Recommended", s.jfEmptyItems).Methods("GET")
+	jfAuth.HandleFunc("/LiveTv/Programs", s.jfEmptyItems).Methods("GET", "POST")
+	jfAuth.HandleFunc("/LiveTv/GuideInfo", s.jfEmptyObject).Methods("GET")
+	jfAuth.HandleFunc("/LiveTv/Timers", s.jfEmptyItems).Methods("GET")
+	jfAuth.HandleFunc("/LiveTv/SeriesTimers", s.jfEmptyItems).Methods("GET")
+	jfAuth.HandleFunc("/LiveTv/Recordings", s.jfEmptyItems).Methods("GET")
+	jfAuth.HandleFunc("/LiveStreams/Open", s.jfOpenLiveStream).Methods("POST")
+	jfAuth.HandleFunc("/LiveStreams/Close", s.jfCloseLiveStream).Methods("POST")
 
 	// Lightweight compatibility stubs used by several official and third-party clients at startup.
 	jfAuth.HandleFunc("/Plugins", s.jfEmptyArray).Methods("GET")
@@ -368,7 +390,7 @@ func (s *Server) registerRoutes() {
 	jfAuth.HandleFunc("/Auth/Providers", s.jfAuthProviders).Methods("GET")
 	jfAuth.HandleFunc("/Auth/PasswordResetProviders", s.jfPasswordResetProviders).Methods("GET")
 	jfAuth.HandleFunc("/Auth/Keys", s.jfEmptyItems).Methods("GET")
-	jfAuth.HandleFunc("/Auth/Keys", s.jfAuthKey).Methods("POST")
+	jfAuth.HandleFunc("/Auth/Keys", s.jfSessionStub).Methods("POST")
 	jfAuth.HandleFunc("/Auth/Keys/{key}", s.jfSessionStub).Methods("DELETE")
 	jfAuth.HandleFunc("/Startup/Complete", s.jfSessionStub).Methods("POST")
 	jfAuth.HandleFunc("/Startup/Configuration", s.jfStartupConfiguration).Methods("GET")
@@ -410,10 +432,8 @@ func (s *Server) registerRoutes() {
 		jfAuth.HandleFunc("/Jellyfin.Plugin.KodiSyncQueue/{userId}/GetItems", s.jfKodiSyncGetItems).Methods("GET")
 	}
 
-	// WebSocket stub (Jellyfin clients poll this constantly)
-	s.router.HandleFunc("/socket", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	})
+	// Jellyfin session WebSocket (KeepAlive, UserDataChanged, LibraryChanged).
+	s.router.HandleFunc("/socket", s.handleSocket).Methods("GET")
 
 	// Web UI static files
 	if s.config.App.UIEnabled {
@@ -511,4 +531,34 @@ func respondJSON(w http.ResponseWriter, status int, data interface{}) {
 
 func respondError(w http.ResponseWriter, status int, msg string) {
 	respondJSON(w, status, map[string]string{"error": msg})
+}
+
+// respondErrorFor picks the error body by route family: the native /api/v1
+// API keeps {"error": msg}; every other path is the Jellyfin surface and gets
+// RFC 7807 ProblemDetails as its spec declares.
+func respondErrorFor(w http.ResponseWriter, r *http.Request, status int, msg string) {
+	if strings.HasPrefix(r.URL.Path, "/api/v1/") {
+		respondError(w, status, msg)
+		return
+	}
+	respondProblem(w, status, msg)
+}
+
+// respondProblem writes an RFC 7807 ProblemDetails body, which is what the
+// Jellyfin OpenAPI spec declares for every documented error response.
+func respondProblem(w http.ResponseWriter, status int, detail string) {
+	// RFC 9110 numbers 4xx codes under section 15.5 and 5xx under 15.6.
+	section := "15.5." + strconv.Itoa(status-399)
+	if status >= 500 {
+		section = "15.6." + strconv.Itoa(status-499)
+	}
+	body := map[string]interface{}{
+		"type":   "https://tools.ietf.org/html/rfc9110#section-" + section,
+		"title":  http.StatusText(status),
+		"status": status,
+	}
+	if detail != "" {
+		body["detail"] = detail
+	}
+	respondJSON(w, status, body)
 }
