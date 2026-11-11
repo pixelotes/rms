@@ -1,0 +1,24 @@
+# Build context: keep it small, never ship local binaries or secrets.
+.git
+.github
+.gitignore
+.dockerignore
+*.md
+!web/**/*.md
+docs/
+coverage.out
+coverage.html
+*.test
+*.log
+.DS_Store
+.idea/
+.vscode/
+.env
+.env.*
+
+# Local binaries and data
+rms
+metacrawler
+subcrawler
+media/
+config/config.yml

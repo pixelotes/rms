@@ -4,7 +4,7 @@ app:
   # Passwords support environment variables: ${VAR} or $VAR
   ui_password: "${RMS_PASSWORD}"
   jwt_secret: "${RMS_JWT_SECRET}"
-  jellyfin_version: "10.10.7"
+  jellyfin_version: "10.11.0"
   # Optional: enable on-disk remux cache so subsequent plays of remuxed files
   # are served via http.ServeFile and support seek/Range. First play still
   # streams live (no seek); the cache builds in the background and is used on

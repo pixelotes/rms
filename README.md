@@ -1,52 +1,61 @@
-# RMS - Raspberry Media Server
+# RMS
 
-A lightweight, database-free media server that implements the Jellyfin API. Built for low-power devices like the Raspberry Pi.
+A lightweight, database-free media server for the Raspberry Pi that implements the Jellyfin API.
 
-## Why
+Part of [MangoStack](https://github.com/pixelotes/MangoStack), a self-hosted media stack for the Raspberry Pi.
 
-Jellyfin uses ~200 MB of RAM idle. RMS uses ~9 MB. Same libraries, same apps, 23x less memory.
+## Footprint
 
 | | RMS | Jellyfin |
 |---|---|---|
-| Idle memory | ~9 MB | ~200 MB |
-| Streaming memory | ~16 MB | ~250 MB |
-| Disk writes | 0 B | ~2 GB |
+| Idle memory | ~9 MB (last measured on a Raspberry Pi, web UI off, no background jobs; needs re-measuring) | ~200 MB |
+| Streaming memory | ~16 MB direct play (same conditions; needs re-measuring) | ~250 MB |
+| Memory inside MangoStack | ~37 MB (`docker stats`, 128 MB limit, web UI on, default stack config) | - |
 | Database | None | SQLite |
-| Startup time | Instant | ~30s |
+| Disk writes | See below | Database, metadata cache, transcodes |
+
+What changes the numbers:
+
+- **Web UI** (`app.ui_enabled`): adds the UI routes and static files; more memory than API-only.
+- **Number of items**: the item index is held in memory, so it grows with library size.
+- **Background jobs**: `auto_scan`, `rescan_interval_minutes` and `tv_refresh_hours` are off by default; when on they add periodic work.
+- **Remux / transcode**: run as separate `ffmpeg` child processes (capped by `player.max_ffmpeg_processes`, default 1). Their memory and CPU are not part of the `rms` process, but they count against the container limit. Transcode is the heaviest and is off unless listed in `stream_strategy`.
+- **Crawlers**: `metacrawler` and `subcrawler` are separate binaries that run and exit; their code never loads into the server.
+- **GC tuning**: `app.gogc` / `app.memory_limit_mb` (or `GOGC` / `GOMEMLIMIT`) trade RAM for CPU.
+
+Disk writes: with the default config RMS writes nothing to disk. It writes only when you enable one of these:
+
+- `app.cache_path`: remux cache and resized image variants (`<cache_path>/images`), capped by `cache_max_gb` (default 10).
+- `app.userdata_path`: per-user watched/progress state as a JSON file, flushed every `userdata_flush_minutes` (default 5) and on shutdown. Without it, user data lives in memory only.
+- Crawlers (run by `auto_scan`, from the web UI buttons, or by hand): write NFO files, artwork, subtitles and thumbnails into the media folders. This only happens on request.
 
 ## Features
 
-- **Jellyfin-compatible API** — works with Streamyfin, Kodi (Jellyfin plugin), and other Jellyfin clients
-- **Direct play** with remux fallback (FFmpeg); transcode is opt-in and off by default (too heavy for a Pi 3B)
-- **Web UI** — browse libraries, view metadata/artwork, play videos, manage subtitles (optional, toggleable)
-- **NFO + artwork** — reads Kodi-standard NFO files, posters, backdrops, logos, episode thumbnails
-- **Subtitles** — SRT to WebVTT conversion on the fly, multi-language support
-- **Per-user library access** — each user sees only their assigned libraries
-- **No database** — reads directly from the filesystem. Add or remove content and it appears instantly
-- **Environment variable support** — use `${VAR}` in config for Docker secrets
-- **Auto-scan** — optional periodic job to fill in missing metadata, subtitles, and thumbnails
+- **Jellyfin-compatible API**: works with Streamyfin, Kodi (Jellyfin add-on, optional KodiSyncQueue endpoints) and other Jellyfin clients.
+- **Direct play** with stream-copy remux fallback via ffmpeg; transcode is opt-in.
+- **Web UI** (optional): browse libraries, view metadata and artwork, play videos, search/download subtitles, trigger crawlers.
+- **NFO + artwork**: reads Kodi-standard NFO files, posters, backdrops, logos, episode thumbnails.
+- **Subtitles**: SRT to WebVTT conversion on the fly, multiple languages.
+- **Live TV** from M3U/JSON playlists (`content_type: tv`), local file, directory or URL.
+- **Per-user library access**.
+- **No database**: reads the filesystem directly. Index refresh via webhook, polling or auto-scan.
+- **`${VAR}` / `$VAR` substitution** in the config file.
 
-## Architecture
+Three binaries in one image:
 
-Three binaries, one Docker image:
+| Binary | Purpose |
+|---|---|
+| `rms` | Media server (Jellyfin API + web UI) |
+| `metacrawler` | Downloads NFO + artwork; runs and exits |
+| `subcrawler` | Downloads subtitles from OpenSubtitles; runs and exits |
 
-| Binary | Purpose | Memory |
-|---|---|---|
-| `rms` | Media server (Jellyfin API + web UI) | ~9 MB idle |
-| `metacrawler` | Downloads NFO + artwork (TMDB, TVmaze, AniList) | Runs and exits |
-| `subcrawler` | Downloads subtitles (OpenSubtitles) | Runs and exits |
-
-Crawlers run as separate processes — their code never loads into the server's memory.
-
-## Quick Start
-
-### Docker Compose
+## Quick start
 
 ```yaml
 services:
   rms:
     image: pixelotes/rms:arm64
-    container_name: raspberry-media-server
+    container_name: rms
     restart: unless-stopped
     ports:
       - "8082:8082"
@@ -57,126 +66,132 @@ services:
       - "/path/to/config:/app/config"
 ```
 
-### Configuration
+The image runs `./rms -config /app/config/config.yml` and includes ffmpeg. Inside MangoStack it is already wired in `docker-compose.yaml`.
 
-Copy `config/config.example.yml` to your config directory and edit:
+## Configuration
+
+Copy `config/config.example.yml` to `/app/config/config.yml`. `${VAR}` and `$VAR` are expanded from the environment (left untouched if unset).
 
 ```yaml
 app:
-  port: 8082
+  port: 8082                    # default 8082
   ui_enabled: true
-  ui_password: "${RMS_PASSWORD}"
-  jwt_secret: "${RMS_JWT_SECRET}"
-  jellyfin_version: "10.10.7"
+  ui_password: "${RMS_PASSWORD}"  # password of the built-in "rms" user
+  jwt_secret: "${RMS_JWT_SECRET}" # default "change-me-in-production"
+  jellyfin_version: "10.11.0"   # version reported to clients; default 10.11.0
+  # cache_path: "./cache"       # enables remux + image cache (disk writes)
+  # cache_max_gb: 10
+  # userdata_path: "./config/userdata.json"  # persist watched state (disk writes)
+  # userdata_flush_minutes: 5
+  # kodi_sync_queue: false      # KodiSyncQueue plugin endpoints
+  # kodi_sync_retention_days: 30
+  # webhook_token: "${RMS_WEBHOOK_TOKEN}"    # enables POST /api/v1/library/rescan-hook
+  # gogc: 50
+  # memory_limit_mb: 256
+  debug: false
 
 player:
-  stream_strategy: ["direct", "remux"]   # add "transcode" only on Pi 5 / x86
+  stream_strategy: ["direct", "remux"]   # default; add "transcode" only on Pi 5 / x86
+  max_ffmpeg_processes: 1                # extra requests get 503
 
 libraries:
   - friendly_name: "Movies"
     path: "./media/Movies"
     metadata_lang: en
-    content_type: movies
+    content_type: movies       # movies | tvseries | anime | tv
   - friendly_name: "TV Shows"
     path: "./media/TV"
     content_type: tvseries
   - friendly_name: "Anime"
     path: "./media/Anime"
     content_type: anime
+  # - friendly_name: "TV"
+  #   content_type: tv
+  #   path: "./lists/tv.m3u"   # file, directory or http(s) URL
+  #   tv_proxy: false          # false = 302 redirect, true = proxy the stream
+  #   tv_refresh_hours: 0
 
-# Optional: per-user library access
+# Optional: extra users with per-library access (empty libraries = all)
 users:
-  - username: "raul"
-    password: "${RAUL_PASSWORD}"
+  - username: "alice"
+    password: "${ALICE_PASSWORD}"
     libraries: ["Movies", "Anime"]
-  - username: "maria"
-    password: "${MARIA_PASSWORD}"
+  - username: "bob"
+    password: "${BOB_PASSWORD}"
     libraries: ["Movies", "TV Shows"]
 
-# Optional: crawler settings
 crawlers:
   subtitles:
     api_key: "${OPENSUBTITLES_API_KEY}"
     languages: ["en", "es"]
   metadata:
     tmdb_api_key: "${TMDB_API_KEY}"
+    tvseries_providers: ["tvmaze"]   # tvmaze | tmdb, tried in order
+    anime_providers: ["anilist"]     # anilist | kitsu, tried in order
   auto_scan:
-    enabled: false
+    enabled: false              # runs metacrawler/subcrawler as child processes
+    schedule: ""                # "HH:MM" daily; overrides interval_hours
     interval_hours: 24
+    rescan_interval_minutes: 0  # index-only refresh, no crawlers; 0 = off
     metadata: true
     subtitles: true
-    thumbnails: false
+    thumbnails: false           # CPU intensive
 ```
 
-If no `users` section is defined, a single user `rms` with `ui_password` has access to all libraries.
+The built-in user `rms` (password `ui_password`) always exists and sees every library. At least one of `ui_password` or `users` is required.
 
-## Connecting Clients
+## Usage
 
-### Streamyfin / Jellyfin Apps
+### Jellyfin clients
 
 - Server URL: `http://your-device:8082`
-- Username: any configured user (or anything if using default)
-- Password: the user's password (or `ui_password`)
+- Username/password: `rms` + `ui_password`, or any configured user.
 
 ### Web UI
 
-Navigate to `http://your-device:8082` in a browser. Features include:
-- Library browsing with poster art
-- Metadata display (plot, rating, runtime, genres)
-- Video playback with multi-language subtitles
-- Buttons to download metadata, subtitles, and generate thumbnails
+Open `http://your-device:8082` (when `ui_enabled: true`): library browsing, metadata, playback with subtitles, and buttons to fetch metadata, subtitles and thumbnails.
 
-## Crawlers
+### Library rescans
+
+- `POST /api/v1/library/rescan-hook` with `webhook_token` (for Reel, Sonarr, Radarr, scripts); calls within 5 s are debounced.
+- Or `auto_scan.rescan_interval_minutes` for polling.
 
 ### metacrawler
 
-Downloads NFO files and artwork. Provider is auto-selected by `content_type`:
-- `movies` → TMDB (requires API key)
-- `tvseries` → TVmaze (no key needed)
-- `anime` → AniList (no key needed)
+Writes NFO files and artwork into the media folders. Provider by `content_type`:
+
+- `movies`: TMDB (API key required)
+- `tvseries`: TVmaze (no key) or TMDB, per `tvseries_providers`
+- `anime`: AniList (no key) or Kitsu, per `anime_providers`
 
 ```bash
-# Process all libraries from config
-docker exec raspberry-media-server ./metacrawler -config /app/config/config.yml
+# All libraries
+docker exec rms ./metacrawler -config /app/config/config.yml
 
-# Single directory
-docker exec raspberry-media-server ./metacrawler --type movies --tmdb-key xxx --path "/app/media/Movies/Big Buck Bunny (2008)"
+# One directory, overriding the content type
+docker exec rms ./metacrawler -config /app/config/config.yml -type movies -path "/app/media/Movies/Big Buck Bunny (2008)"
 
-# Generate thumbnails (extracts a frame from each video)
-docker exec raspberry-media-server ./metacrawler --thumbnails -config /app/config/config.yml
+# Re-fetch even if an NFO exists
+docker exec rms ./metacrawler -config /app/config/config.yml -force
+
+# Thumbnails only (extracts a frame from each video)
+docker exec rms ./metacrawler -config /app/config/config.yml -thumbnails
 ```
 
 ### subcrawler
 
-Downloads subtitles from OpenSubtitles. Searches by file hash first, then by filename.
+Downloads subtitles from OpenSubtitles (API key and languages from config). Searches by file hash first, then by filename.
 
 ```bash
-# Process all libraries from config
-docker exec raspberry-media-server ./subcrawler -config /app/config/config.yml
-
-# Single directory
-docker exec raspberry-media-server ./subcrawler --api-key xxx --langs en,es --recursive --path "/app/media/Movies/"
+docker exec rms ./subcrawler -config /app/config/config.yml
+docker exec rms ./subcrawler -config /app/config/config.yml -path "/app/media/Movies/" -recursive
 ```
 
-Both crawlers skip content that already has metadata/subtitles.
+Both crawlers skip content that already has metadata/subtitles (unless `-force` for metacrawler).
 
-## Building from Source
+### Directory layout
 
-```bash
-# Server
-go build -o rms ./cmd/rms
-
-# Crawlers
-go build -o metacrawler ./cmd/metacrawler
-go build -o subcrawler ./cmd/subcrawler
-
-# Cross-compile for Raspberry Pi
-GOOS=linux GOARCH=arm64 go build -o rms ./cmd/rms
-```
-
-## Expected Directory Structure
-
-RMS reads standard Kodi/Jellyfin media layouts:
+RMS reads standard Kodi/Jellyfin layouts:
 
 ```
 Movies/
@@ -201,11 +216,41 @@ TV Shows/
       Sintel.S01E01.720p-thumb.jpg
 ```
 
-## Part of the Stack
+## Building from source
 
-RMS is designed to work alongside:
-- **[Reel](https://github.com/pixelotes/reel)** — media downloader, organizer, metadata fetcher
-- **[Scarf](https://github.com/pixelotes/scarf)** — torrent indexer/searcher
+```bash
+go build -o rms ./cmd/rms
+go build -o metacrawler ./cmd/metacrawler
+go build -o subcrawler ./cmd/subcrawler
+
+# Cross-compile for Raspberry Pi
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o rms ./cmd/rms
+```
+
+ffmpeg/ffprobe must be on `PATH` for remux, transcode, thumbnails and image resizing.
+
+## Limits
+
+- Transcoding saturates a Raspberry Pi 3B; keep it off there. Only one ffmpeg process runs at a time by default.
+- The first play of a remuxed file cannot seek; with `cache_path` set, later plays can.
+- Without `userdata_path`, watched state is lost on restart.
+- Movie metadata needs a TMDB API key; subtitles need an OpenSubtitles API key.
+- Only part of the Jellyfin API is implemented; some endpoints are stubs.
+- Do not expose it to the internet. It assumes a trusted LAN. Change `jwt_secret` from its default.
+
+## Part of MangoStack
+
+| App | Role |
+|---|---|
+| [Scarf](https://github.com/pixelotes/scarf) | Indexer proxy (Torznab) |
+| [Parasol](https://github.com/pixelotes/parasol) | Optional Cloudflare solver for Scarf |
+| [Reel](https://github.com/pixelotes/reel) | Movie & TV automation |
+| [Tango](https://github.com/pixelotes/tango) | Web UI and REST API for aria2c |
+| [RMS](https://github.com/pixelotes/rms) | Media server (Jellyfin API) |
+| [Suika](https://github.com/pixelotes/suika) | Manga reader |
+| [Kaze](https://github.com/pixelotes/kaze) | Music server (Subsonic API) |
+| [Sumi](https://github.com/pixelotes/sumi) | EPUB reader |
+| [Dashboarr](https://github.com/pixelotes/dashboarr) | Homepage |
 
 ## License
 

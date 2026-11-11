@@ -22,3 +22,17 @@ config/config.yml
 
 # TV / IPTV playlists — user-provided; not shipped (third-party content)
 /lists/
+
+# OS / editor
+*.swo
+*.log
+.env
+.env.*
+!.env.example
+
+# Go build output
+*.test
+*.out
+/dist/
+coverage.out
+coverage.html
