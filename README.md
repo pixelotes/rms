@@ -47,7 +47,7 @@ Three binaries in one image:
 |---|---|
 | `rms` | Media server (Jellyfin API + web UI) |
 | `metacrawler` | Downloads NFO + artwork; runs and exits |
-| `subcrawler` | Downloads subtitles from OpenSubtitles; runs and exits |
+| `subcrawler` | Downloads subtitles (OpenSubtitles, SubDL, Subdivx); runs and exits |
 
 ## Quick start
 
@@ -121,13 +121,18 @@ users:
     libraries: ["Movies", "TV Shows"]
 
 crawlers:
+  backends: ["local"]           # local | service (a Scout server) | both, in order
+  # service: {url: "http://scout:8090", token: "", timeout: 10}
   subtitles:
     api_key: "${OPENSUBTITLES_API_KEY}"
+    subdl_api_key: ""           # SubDL, free key
+    flaresolverr_url: ""        # enables Subdivx (Spanish), e.g. http://parasol:8191
     languages: ["en", "es"]
   metadata:
     tmdb_api_key: "${TMDB_API_KEY}"
-    tvseries_providers: ["tvmaze"]   # tvmaze | tmdb, tried in order
-    anime_providers: ["anilist"]     # anilist | kitsu, tried in order
+    movie_providers: ["tmdb", "imdb"]              # defaults
+    tvseries_providers: ["tvmaze"]
+    anime_providers: ["tvmaze", "anilist", "kitsu"]
   auto_scan:
     enabled: false              # runs metacrawler/subcrawler as child processes
     schedule: ""                # "HH:MM" daily; overrides interval_hours
@@ -158,11 +163,13 @@ Open `http://your-device:8082` (when `ui_enabled: true`): library browsing, meta
 
 ### metacrawler
 
-Writes NFO files and artwork into the media folders. Provider by `content_type`:
+Writes `movie.nfo` / `tvshow.nfo` (with every external ID found: IMDb, TMDB, TVDB, TVmaze, AniList…) and artwork into the media folders. Lookups go through [Scout](https://github.com/pixelotes/scout), shared with Reel, inside RMS or on a Scout service (`crawlers.backends`). Providers are tried in order: a library's own `providers`, else `crawlers.metadata.<type>_providers`:
 
-- `movies`: TMDB (API key required)
-- `tvseries`: TVmaze (no key) or TMDB, per `tvseries_providers`
-- `anime`: AniList (no key) or Kitsu, per `anime_providers`
+- `movies`: TMDB (API key), IMDb (keyless), Trakt; AniList/Kitsu for anime films
+- `tvseries`: TVmaze (keyless), TMDB, Trakt
+- `anime`: TVmaze first (every season, episode titles, IMDb ID), then AniList and Kitsu (one entry per season)
+
+Libraries with `download_metadata: false` are skipped by the scheduled crawl.
 
 ```bash
 # All libraries
@@ -180,7 +187,7 @@ docker exec rms ./metacrawler -config /app/config/config.yml -thumbnails
 
 ### subcrawler
 
-Downloads subtitles from OpenSubtitles (API key and languages from config). Searches by file hash first, then by filename.
+Downloads missing subtitles through Scout from OpenSubtitles (`api_key`), SubDL (`subdl_api_key`) and Subdivx for Spanish (`flaresolverr_url`, through Parasol or FlareSolverr), searched together. OpenSubtitles matches by file hash first; all use the IMDb/TMDB IDs from the nearest NFO and the title. Season packs are opened to extract the episode. The scan stops when OpenSubtitles' daily quota is used up, and skips libraries with `download_subtitles: false`.
 
 ```bash
 docker exec rms ./subcrawler -config /app/config/config.yml
@@ -234,7 +241,9 @@ ffmpeg/ffprobe must be on `PATH` for remux, transcode, thumbnails and image resi
 - Transcoding saturates a Raspberry Pi 3B; keep it off there. Only one ffmpeg process runs at a time by default.
 - The first play of a remuxed file cannot seek; with `cache_path` set, later plays can.
 - Without `userdata_path`, watched state is lost on restart.
-- Movie metadata needs a TMDB API key; subtitles need an OpenSubtitles API key.
+- Without a TMDB key, movie metadata comes from IMDb suggestions + Cinemeta (unofficial). Subtitles need at least one of: an OpenSubtitles key, a SubDL key, or a FlareSolverr-compatible solver for Subdivx.
+- Episode NFOs are not written; only `movie.nfo` and `tvshow.nfo`.
+- Every scheduled subtitle scan searches again for videos that had no match last time.
 - Only part of the Jellyfin API is implemented; some endpoints are stubs.
 - Do not expose it to the internet. It assumes a trusted LAN. Change `jwt_secret` from its default.
 

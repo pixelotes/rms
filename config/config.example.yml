@@ -87,11 +87,21 @@ libraries:
 # "reel" downloader), you can leave auto_scan.enabled: false and they never run.
 # They only earn their keep for media you drop in by hand without sidecar files.
 crawlers:
+  # Lookups go through Scout (github.com/pixelotes/scout): "local" runs the
+  # providers inside RMS's crawlers, "service" asks a Scout server; with both,
+  # the second is only used when the first fails.
+  backends: ["local"]
+  # service:
+  #   url: "http://scout:8090"
+  #   token: ""
   subtitles:
-    api_key: "${OPENSUBTITLES_API_KEY}"
+    api_key: "${OPENSUBTITLES_API_KEY}"   # OpenSubtitles
+    subdl_api_key: ""                     # SubDL (free key)
+    flaresolverr_url: ""                  # enables Subdivx (Spanish), e.g. http://parasol:8191
     languages: ["en", "es"]
   metadata:
     tmdb_api_key: "${TMDB_API_KEY}"
+    # anime_providers: ["tvmaze", "anilist", "kitsu"]   # default; tvmaze has every season
 
   # --- Background jobs overview --------------------------------------------
   # rms can run up to three independent background jobs. Each only starts when

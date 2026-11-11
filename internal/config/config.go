@@ -22,9 +22,15 @@ type Config struct {
 }
 
 type CrawlerConfig struct {
-	Subtitles SubCrawlerConfig  `yaml:"subtitles"`
-	Metadata  MetaCrawlerConfig `yaml:"metadata"`
-	AutoScan  AutoScanConfig    `yaml:"auto_scan"`
+	// Backends chooses where lookups run, via scout
+	// (github.com/pixelotes/scout): "local" (providers inside RMS),
+	// "service" (a scout server), or both in order, the second used only
+	// when the first fails.
+	Backends  []string           `yaml:"backends"`
+	Service   ScoutServiceConfig `yaml:"service"`
+	Subtitles SubCrawlerConfig   `yaml:"subtitles"`
+	Metadata  MetaCrawlerConfig  `yaml:"metadata"`
+	AutoScan  AutoScanConfig     `yaml:"auto_scan"`
 }
 
 type AutoScanConfig struct {
@@ -37,9 +43,20 @@ type AutoScanConfig struct {
 	Thumbnails            bool   `yaml:"thumbnails"`
 }
 
+type ScoutServiceConfig struct {
+	URL     string `yaml:"url"`
+	Token   string `yaml:"token"`
+	Timeout int    `yaml:"timeout"` // seconds
+}
+
 type SubCrawlerConfig struct {
-	APIKey    string   `yaml:"api_key"`
+	APIKey    string   `yaml:"api_key"` // OpenSubtitles
 	Languages []string `yaml:"languages"`
+	// Providers searched together, results merged. Default: opensubtitles,
+	// subdl, subdivx; each is skipped without its key or solver.
+	Providers       []string `yaml:"providers"`
+	SubDLAPIKey     string   `yaml:"subdl_api_key"`
+	FlareSolverrURL string   `yaml:"flaresolverr_url"` // enables subdivx (Spanish)
 }
 
 type MetaCrawlerConfig struct {
@@ -57,19 +74,19 @@ type User struct {
 }
 
 type AppConfig struct {
-	Port            int    `yaml:"port"`
-	UIEnabled       bool   `yaml:"ui_enabled"`
-	UIPassword      string `yaml:"ui_password"`
-	JWTSecret       string `yaml:"jwt_secret"`
-	JellyfinVersion string `yaml:"jellyfin_version"`
-	KodiSyncQueue          bool `yaml:"kodi_sync_queue"`
-	KodiSyncRetentionDays  int  `yaml:"kodi_sync_retention_days"` // 0 = default (30 days)
-	UserdataPath         string `yaml:"userdata_path"`
-	UserdataFlushMinutes int    `yaml:"userdata_flush_minutes"` // 0 = default (5 min)
-	CachePath       string `yaml:"cache_path"`
-	CacheMaxGB      int    `yaml:"cache_max_gb"`
-	Debug           bool   `yaml:"debug"`
-	WebhookToken    string `yaml:"webhook_token"` // if set, enables POST /api/v1/library/rescan-hook
+	Port                  int    `yaml:"port"`
+	UIEnabled             bool   `yaml:"ui_enabled"`
+	UIPassword            string `yaml:"ui_password"`
+	JWTSecret             string `yaml:"jwt_secret"`
+	JellyfinVersion       string `yaml:"jellyfin_version"`
+	KodiSyncQueue         bool   `yaml:"kodi_sync_queue"`
+	KodiSyncRetentionDays int    `yaml:"kodi_sync_retention_days"` // 0 = default (30 days)
+	UserdataPath          string `yaml:"userdata_path"`
+	UserdataFlushMinutes  int    `yaml:"userdata_flush_minutes"` // 0 = default (5 min)
+	CachePath             string `yaml:"cache_path"`
+	CacheMaxGB            int    `yaml:"cache_max_gb"`
+	Debug                 bool   `yaml:"debug"`
+	WebhookToken          string `yaml:"webhook_token"` // if set, enables POST /api/v1/library/rescan-hook
 
 	// GC tuning for low-memory devices. Both honor their standard env vars first
 	// (GOGC / GOMEMLIMIT); a config value is applied only when the env var is
@@ -104,18 +121,28 @@ func (p PlayerConfig) AllowsStrategy(name string) bool {
 }
 
 type Library struct {
-	FriendlyName      string   `yaml:"friendly_name"`
-	Path              string   `yaml:"path"`
-	MetadataLang      string   `yaml:"metadata_lang"`
-	DownloadMetadata  YAMLBool `yaml:"download_metadata"`
-	DownloadSubtitles YAMLBool `yaml:"download_subtitles"`
-	ContentType       string   `yaml:"content_type"` // "movies" | "tvseries" | "anime" | "tv"
-	Providers         []string `yaml:"providers,omitempty"`
+	FriendlyName      string    `yaml:"friendly_name"`
+	Path              string    `yaml:"path"`
+	MetadataLang      string    `yaml:"metadata_lang"`
+	DownloadMetadata  *YAMLBool `yaml:"download_metadata"`  // unset = true
+	DownloadSubtitles *YAMLBool `yaml:"download_subtitles"` // unset = true
+	ContentType       string    `yaml:"content_type"`       // "movies" | "tvseries" | "anime" | "tv"
+	Providers         []string  `yaml:"providers,omitempty"`
 
 	// TV / IPTV libraries (content_type: "tv"). Path points to an M3U/JSON
 	// playlist, a directory of them, or an http(s) URL (see ADR-015).
 	TVProxy        YAMLBool `yaml:"tv_proxy"`         // proxy the stream instead of 302 redirect
 	TVRefreshHours int      `yaml:"tv_refresh_hours"` // re-fetch a remote playlist every N hours (0 = boot/rescan only)
+}
+
+// WantsMetadata reports whether crawlers should fetch metadata for this
+// library (download_metadata, default true).
+func (l Library) WantsMetadata() bool { return l.DownloadMetadata == nil || bool(*l.DownloadMetadata) }
+
+// WantsSubtitles reports whether crawlers should fetch subtitles for this
+// library (download_subtitles, default true).
+func (l Library) WantsSubtitles() bool {
+	return l.DownloadSubtitles == nil || bool(*l.DownloadSubtitles)
 }
 
 // YAMLBool handles YAML booleans that may be strings ("true"/"false") or native bools.
@@ -211,10 +238,16 @@ func (c *Config) setDefaults() {
 		c.App.CacheMaxGB = 10
 	}
 	if len(c.Crawlers.Metadata.AnimeProviders) == 0 {
-		c.Crawlers.Metadata.AnimeProviders = []string{"anilist"}
+		c.Crawlers.Metadata.AnimeProviders = []string{"tvmaze", "anilist", "kitsu"}
 	}
 	if len(c.Crawlers.Metadata.MovieProviders) == 0 {
-		c.Crawlers.Metadata.MovieProviders = []string{"tmdb"}
+		c.Crawlers.Metadata.MovieProviders = []string{"tmdb", "imdb"}
+	}
+	if len(c.Crawlers.Backends) == 0 {
+		c.Crawlers.Backends = []string{"local"}
+	}
+	if c.Crawlers.Service.Timeout == 0 {
+		c.Crawlers.Service.Timeout = 10
 	}
 	if len(c.Crawlers.Metadata.TVSeriesProviders) == 0 {
 		c.Crawlers.Metadata.TVSeriesProviders = []string{"tvmaze"}
@@ -301,6 +334,17 @@ func (c *Config) validate() error {
 		}
 		if lib.FriendlyName == "" {
 			return fmt.Errorf("library[%d].friendly_name is required", i)
+		}
+	}
+	for _, b := range c.Crawlers.Backends {
+		switch b {
+		case "local":
+		case "service":
+			if c.Crawlers.Service.URL == "" {
+				return fmt.Errorf("crawlers.service.url is required when crawlers.backends includes service")
+			}
+		default:
+			return fmt.Errorf("crawlers.backends: unknown backend %q (use local, service or both)", b)
 		}
 	}
 	return nil
