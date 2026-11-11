@@ -1,4 +1,4 @@
-package metadata
+package media
 
 import (
 	"fmt"
@@ -7,10 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 )
-
-var videoExts = map[string]bool{
-	".mkv": true, ".mp4": true, ".avi": true, ".m4v": true, ".mov": true, ".webm": true,
-}
 
 // GenerateThumbnail extracts a frame from a video using ffmpeg.
 // Captures at 10% of the video duration for a representative frame.
@@ -73,8 +69,7 @@ func GenerateThumbnailsInDir(dir string, recursive bool) int {
 			continue
 		}
 
-		ext := strings.ToLower(filepath.Ext(e.Name()))
-		if !videoExts[ext] {
+		if !IsVideoFile(e.Name()) {
 			continue
 		}
 

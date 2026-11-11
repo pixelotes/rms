@@ -1,6 +1,11 @@
+// Command metacrawler writes movie.nfo / tvshow.nfo and artwork for each
+// title folder in the libraries, using scout for the lookups. RMS runs it as a
+// separate, low-priority process so the server keeps its small footprint.
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"log"
 	"os"
@@ -8,9 +13,14 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/pixelotes/scout"
+	"github.com/pixelotes/scout/nfo"
 
 	"raspberry-media-server/internal/config"
-	"raspberry-media-server/internal/crawlers/metadata"
+	"raspberry-media-server/internal/media"
+	"raspberry-media-server/internal/scoutclient"
 )
 
 // yearRe matches a 4-digit year in parentheses, e.g. "The Matrix (1999)".
@@ -47,14 +57,18 @@ func main() {
 		return
 	}
 
-	runMetadata(cfg, *targetPath, *contentType, *force)
+	backend, err := scoutclient.New(cfg)
+	if err != nil {
+		log.Fatalf("metacrawler: %v", err)
+	}
+	runMetadata(cfg, backend, *targetPath, *contentType, *force)
 }
 
 func runThumbnails(cfg *config.Config, targetPath string) {
 	dirs := targetDirs(cfg, targetPath, "")
 	total := 0
 	for _, dir := range dirs {
-		n := metadata.GenerateThumbnailsInDir(dir, true)
+		n := media.GenerateThumbnailsInDir(dir, true)
 		total += n
 		if n > 0 {
 			log.Printf("thumbnails: %d generated under %s", n, dir)
@@ -63,11 +77,16 @@ func runThumbnails(cfg *config.Config, targetPath string) {
 	log.Printf("thumbnails: done (%d total)", total)
 }
 
-func runMetadata(cfg *config.Config, targetPath, contentTypeOverride string, force bool) {
+func runMetadata(cfg *config.Config, b scout.Backend, targetPath, contentTypeOverride string, force bool) {
+	done, failed := 0, 0
 	for _, lib := range cfg.Libraries {
 		ct := lib.ContentType
 		if contentTypeOverride != "" {
 			ct = contentTypeOverride
+		}
+		kind, ok := scoutclient.Kind(ct)
+		if !ok {
+			continue // e.g. "tv" (IPTV) libraries
 		}
 
 		// Determine which directories under this library to crawl.
@@ -78,161 +97,91 @@ func runMetadata(cfg *config.Config, targetPath, contentTypeOverride string, for
 			if !strings.HasPrefix(absTarget, absLib) {
 				continue
 			}
-			dirs = []string{absTarget}
+			if absTarget == absLib {
+				dirs = subdirs(lib.Path)
+			} else {
+				dirs = []string{absTarget}
+			}
 		} else {
+			// download_metadata: false only stops the scheduled crawl; a
+			// crawl asked for from the UI still runs.
+			if !lib.WantsMetadata() {
+				continue
+			}
 			dirs = subdirs(lib.Path)
 		}
 
+		lang := lib.MetadataLang
+		if lang == "" {
+			lang = "en"
+		}
+		providers := scoutclient.Providers(cfg, lib, ct)
 		for _, dir := range dirs {
-			crawlDir(cfg, lib, dir, ct, force)
+			switch err := crawlDir(b, dir, kind, lang, providers, force); {
+			case err == nil:
+				done++
+			case errors.Is(err, errSkipped):
+			default:
+				failed++
+				log.Printf("metacrawler: %s: %v", filepath.Base(dir), err)
+			}
 		}
 	}
+	log.Printf("metacrawler: done — %d written, %d failed", done, failed)
 }
 
-func crawlDir(cfg *config.Config, lib config.Library, dir, contentType string, force bool) {
-	lang := lib.MetadataLang
-	if lang == "" {
-		lang = "en"
-	}
+var errSkipped = errors.New("skipped")
 
-	switch contentType {
-	case "movies":
-		crawlMovies(cfg, dir, lang, force)
-	case "tvseries":
-		crawlTVSeries(cfg, dir, lang, force)
-	case "anime":
-		crawlAnime(cfg, dir, lang, force)
-	default:
-		log.Printf("metacrawler: skipping %s (unsupported content type %q)", dir, contentType)
+// crawlDir identifies one title folder and writes its NFO and artwork.
+func crawlDir(b scout.Backend, dir string, kind scout.Kind, lang string, providers []string, force bool) error {
+	nfoName := "tvshow.nfo"
+	if kind == scout.Movie {
+		nfoName = "movie.nfo"
 	}
-}
-
-func crawlMovies(cfg *config.Config, dir, lang string, force bool) {
-	nfoPath := filepath.Join(dir, "movie.nfo")
 	if !force {
-		if _, err := os.Stat(nfoPath); err == nil {
-			return
+		if _, err := os.Stat(filepath.Join(dir, nfoName)); err == nil {
+			return errSkipped
 		}
 	}
-
 	title, year := parseTitleYear(filepath.Base(dir))
 	if title == "" {
-		return
+		return errSkipped
 	}
 
-	client := metadata.NewTMDBClient(cfg.Crawlers.Metadata.TMDBKey, lang)
-	result, err := client.SearchMovie(title, year)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	items, err := b.Search(ctx, scout.Query{Kind: kind, Title: title, Year: year, Language: lang, Providers: providers, Limit: 1})
 	if err != nil {
-		log.Printf("metacrawler: movie %q: %v", title, err)
-		return
+		return err
 	}
-
-	if err := metadata.WriteMovieNFO(dir, result); err != nil {
-		log.Printf("metacrawler: write NFO for %q: %v", title, err)
-		return
+	item, err := b.Get(ctx, scout.Lookup{Kind: kind, Provider: items[0].Provider, ID: items[0].ID, Language: lang})
+	if err != nil {
+		return err
 	}
-
-	poster, backdrop, _ := client.GetMovieImages(0)
-	if result.PosterURL != "" {
-		poster = result.PosterURL
+	// Keep IDs only the search result had (e.g. Cinemeta's TMDB ID).
+	if item.IDs == nil {
+		item.IDs = scout.IDs{}
 	}
-	if result.BackdropURL != "" {
-		backdrop = result.BackdropURL
-	}
-	metadata.DownloadImages(dir, poster, backdrop, "")
-	log.Printf("metacrawler: movie %q done", title)
-}
-
-func crawlTVSeries(cfg *config.Config, dir, lang string, force bool) {
-	nfoPath := filepath.Join(dir, "tvshow.nfo")
-	if !force {
-		if _, err := os.Stat(nfoPath); err == nil {
-			return
+	for k, v := range items[0].IDs {
+		if _, ok := item.IDs[k]; !ok {
+			item.IDs[k] = v
 		}
 	}
 
-	title, year := parseTitleYear(filepath.Base(dir))
-	if title == "" {
-		return
+	if kind == scout.Movie {
+		err = nfo.WriteMovie(dir, item)
+	} else {
+		err = nfo.WriteShow(dir, item)
 	}
-
-	providers := cfg.Crawlers.Metadata.TVSeriesProviders
-	if len(providers) == 0 {
-		providers = []string{"tvmaze"}
+	if err != nil {
+		return err
 	}
-
-	var result *metadata.TVShowResult
-	var err error
-	for _, p := range providers {
-		switch p {
-		case "tvmaze":
-			result, err = metadata.NewTVmazeClient().SearchTVShow(title)
-		case "tmdb":
-			result, err = metadata.NewTMDBClient(cfg.Crawlers.Metadata.TMDBKey, lang).SearchTVShow(title, year)
-		}
-		if err == nil && result != nil {
-			break
-		}
+	files, artErr := nfo.DownloadArtwork(ctx, dir, item)
+	log.Printf("metacrawler: %s → %s (%d) via %s %v, %d artwork file(s)", filepath.Base(dir), item.Title, item.Year, item.Provider, item.IDs, len(files))
+	if artErr != nil {
+		log.Printf("metacrawler: %s: %v", filepath.Base(dir), artErr)
 	}
-
-	if result == nil {
-		log.Printf("metacrawler: tvshow %q: not found", title)
-		return
-	}
-
-	if err := metadata.WriteTVShowNFO(dir, result); err != nil {
-		log.Printf("metacrawler: write tvshow NFO for %q: %v", title, err)
-		return
-	}
-
-	metadata.DownloadImages(dir, result.PosterURL, result.BackdropURL, "")
-	log.Printf("metacrawler: tvshow %q done", title)
-}
-
-func crawlAnime(cfg *config.Config, dir, lang string, force bool) {
-	nfoPath := filepath.Join(dir, "tvshow.nfo")
-	if !force {
-		if _, err := os.Stat(nfoPath); err == nil {
-			return
-		}
-	}
-
-	title, _ := parseTitleYear(filepath.Base(dir))
-	if title == "" {
-		return
-	}
-
-	providers := cfg.Crawlers.Metadata.AnimeProviders
-	if len(providers) == 0 {
-		providers = []string{"anilist"}
-	}
-
-	var result *metadata.TVShowResult
-	var err error
-	for _, p := range providers {
-		switch p {
-		case "anilist":
-			result, err = metadata.NewAniListClient().SearchAnime(title)
-		case "kitsu":
-			result, err = metadata.NewKitsuClient().SearchAnime(title)
-		}
-		if err == nil && result != nil {
-			break
-		}
-	}
-
-	if result == nil {
-		log.Printf("metacrawler: anime %q: not found", title)
-		return
-	}
-
-	if err := metadata.WriteTVShowNFO(dir, result); err != nil {
-		log.Printf("metacrawler: write anime NFO for %q: %v", title, err)
-		return
-	}
-
-	metadata.DownloadImages(dir, result.PosterURL, result.BackdropURL, "")
-	log.Printf("metacrawler: anime %q done", title)
+	return nil
 }
 
 // targetDirs returns the root directories to process: the single targetPath

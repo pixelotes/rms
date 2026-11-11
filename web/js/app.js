@@ -621,24 +621,25 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         // Sort: hash matches first, then by downloads desc.
-        results.sort((a, b) => (b.moviehash_match - a.moviehash_match) || (b.downloads - a.downloads));
+        results.sort((a, b) => ((b.hash_match ? 1 : 0) - (a.hash_match ? 1 : 0)) || ((b.downloads || 0) - (a.downloads || 0)));
 
         subSearchResults.innerHTML = results.map((r, idx) => {
             const tags = [];
-            if (r.moviehash_match) tags.push('<span class="tag hash">✓ Hash match</span>');
-            if (r.from_trusted) tags.push('<span class="tag trusted">Trusted</span>');
+            if (r.provider) tags.push(`<span class="tag">${escapeHtml(r.provider)}</span>`);
+            if (r.language) tags.push(`<span class="tag">${escapeHtml(r.language)}</span>`);
+            if (r.hash_match) tags.push('<span class="tag hash">✓ Hash match</span>');
+            if (r.trusted) tags.push('<span class="tag trusted">Trusted</span>');
             if (r.hd) tags.push('<span class="tag hd">HD</span>');
             if (r.fps) tags.push(`<span class="tag">${r.fps.toFixed(2)} fps</span>`);
             if (r.downloads) tags.push(`<span class="tag">${r.downloads.toLocaleString()} downloads</span>`);
             if (r.rating > 0) tags.push(`<span class="tag">★ ${r.rating.toFixed(1)}</span>`);
             if (r.hearing_impaired) tags.push('<span class="tag">SDH</span>');
-            if (r.ai_translated) tags.push('<span class="tag warn">AI translated</span>');
             if (r.machine_translated) tags.push('<span class="tag warn">Machine translated</span>');
             if (r.uploader) tags.push(`<span class="tag">${escapeHtml(r.uploader)}</span>`);
 
-            return `<div class="sub-result ${r.moviehash_match ? 'hash-match' : ''}" data-idx="${idx}">
+            return `<div class="sub-result ${r.hash_match ? 'hash-match' : ''}" data-idx="${idx}">
                 <div class="sub-result-main">
-                    <div class="sub-result-name">${escapeHtml(r.file_name)}</div>
+                    <div class="sub-result-name">${escapeHtml(r.file_name || r.release || r.file_id)}</div>
                     ${r.release ? `<div class="sub-result-release">${escapeHtml(r.release)}</div>` : ''}
                     <div class="sub-result-meta">${tags.join('')}</div>
                 </div>
@@ -657,7 +658,7 @@ document.addEventListener('DOMContentLoaded', () => {
         subSearchResults.innerHTML = '<div class="loading">Searching…</div>';
         try {
             const resp = await fetchWithAuth(
-                `/api/v1/subtitles-search/${encodeURIComponent(state.currentVideoPath)}`,
+                `/api/v1/subtitles-search/${encodeURIComponent(state.currentVideoPath.replace(/^\//, ''))}`,
                 {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -689,11 +690,11 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.textContent = 'Downloading…';
         try {
             const resp = await fetchWithAuth(
-                `/api/v1/subtitles-download/${encodeURIComponent(state.currentVideoPath)}`,
+                `/api/v1/subtitles-download/${encodeURIComponent(state.currentVideoPath.replace(/^\//, ''))}`,
                 {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ file_id: r.file_id, language: r.language || subSearchLang.value })
+                    body: JSON.stringify({ provider: r.provider, file_id: r.file_id, language: r.language || subSearchLang.value })
                 }
             );
             const data = await resp.json();

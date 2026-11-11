@@ -75,17 +75,25 @@ crawlers:
     tmdb_api_key: ${TMDB_API_KEY}     # Required for TMDB provider
     trakt_client_id: ""               # Optional Trakt integration
     anime_providers:                  # Default providers per content type
+      - tvmaze
       - anilist
+      - kitsu
     movie_providers:
       - tmdb
+      - imdb
     tvseries_providers:
       - tvmaze
 
   subtitles:
     api_key: ${OPENSUBTITLES_KEY}     # OpenSubtitles API key
+    subdl_api_key: ""                 # SubDL API key (free)
+    flaresolverr_url: ""              # Enables Subdivx (Spanish) via Parasol/FlareSolverr
     languages:
       - en
       - es
+
+  backends: ["local"]                 # local | service (a Scout server) | both, in order
+  # service: {url: "http://scout:8090", token: "", timeout: 10}
 
   auto_scan:
     enabled: true

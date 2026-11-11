@@ -2,6 +2,17 @@
 
 RMS ships two crawler binaries for fetching metadata and subtitles. They are separate processes that run on demand or on a schedule — they don't consume server memory when idle.
 
+Both use [Scout](https://github.com/pixelotes/scout), the metadata and subtitle library shared with Reel. `crawlers.backends` chooses where lookups run: `local` (default, providers inside the binaries), `service` (a Scout server, which then holds the API keys, the cache and the subtitle quota), or both in order, the second used only when the first fails.
+
+```yaml
+crawlers:
+  backends: ["service", "local"]
+  service:
+    url: "http://scout:8090"
+    token: ""
+    timeout: 10
+```
+
 ## Metacrawler
 
 Downloads metadata (NFO files), artwork (posters, backdrops, logos), and optionally generates video thumbnails.
@@ -10,9 +21,13 @@ Downloads metadata (NFO files), artwork (posters, backdrops, logos), and optiona
 
 | Content Type | Providers | API Key Required |
 |-------------|-----------|-----------------|
-| Movies | TMDB | Yes |
-| TV Series | TVmaze, TMDB | TVmaze: No, TMDB: Yes |
-| Anime | AniList, Kitsu | No |
+| Movies | TMDB, IMDb, Trakt (AniList, Kitsu for anime films) | TMDB, Trakt: yes; IMDb: no |
+| TV Series | TVmaze, TMDB, Trakt | TVmaze: no |
+| Anime | TVmaze, AniList, Kitsu, TMDB, Trakt | TVmaze, AniList, Kitsu: no |
+
+For anime, keep `tvmaze` first: AniList and Kitsu list each season as a separate title, so a show identified through them only gets its first season, numbered episodes and no IMDb ID.
+
+NFOs carry every external ID the provider knows (`<uniqueid>` for imdb, tmdb, tvdb, tvmaze, anilist, kitsu, mal, trakt).
 
 ### Usage
 
@@ -48,11 +63,11 @@ For a TV show:
 Show Name (Year)/
   tvshow.nfo       # Show-level metadata
   poster.jpg
+  folder.jpg
   fanart.jpg
-  Season 1/
-    Show.S01E01.nfo  # Per-episode metadata
-    Show.S01E02.nfo
 ```
+
+Episode NFOs are not written.
 
 ### Configuration
 
@@ -60,12 +75,10 @@ Show Name (Year)/
 crawlers:
   metadata:
     tmdb_api_key: ${TMDB_API_KEY}
-    anime_providers:
-      - anilist       # Default for anime
-    movie_providers:
-      - tmdb          # Default for movies
-    tvseries_providers:
-      - tvmaze        # Default for TV (no API key needed)
+    trakt_client_id: ""
+    anime_providers: [tvmaze, anilist, kitsu]   # default
+    movie_providers: [tmdb, imdb]               # default
+    tvseries_providers: [tvmaze]                # default (no API key needed)
 ```
 
 Per-library provider override:
@@ -75,13 +88,19 @@ libraries:
   - friendly_name: Anime
     path: /app/media/Anime
     content_type: anime
-    providers:
-      - kitsu         # Use Kitsu instead of default AniList
+    providers: [kitsu, anilist]   # replaces anime_providers for this library
+    download_metadata: false      # skip in the scheduled crawl (default true)
 ```
 
 ## Subcrawler
 
-Downloads subtitles from OpenSubtitles.
+Downloads missing subtitles. Three providers are searched together and their results merged:
+
+| Provider | Config | Notes |
+|----------|--------|-------|
+| OpenSubtitles | `api_key` | The only one matching by file hash. Daily download quota. |
+| SubDL | `subdl_api_key` (free) | By IMDb/TMDB ID or title. |
+| Subdivx | `flaresolverr_url` | Spanish only, through a FlareSolverr-compatible solver such as [Parasol](https://github.com/pixelotes/parasol). Scraping: it can break when the site changes. |
 
 ### Usage
 
@@ -90,7 +109,7 @@ Downloads subtitles from OpenSubtitles.
 ./subcrawler -config config/config.yml
 
 # Process a single file
-./subcrawler -path /media/Movies/movie.mp4 -api-key YOUR_KEY -langs en,es
+./subcrawler -path /media/Movies/movie.mp4
 
 # Process a directory recursively
 ./subcrawler -path /media/Movies/ -recursive
@@ -98,11 +117,13 @@ Downloads subtitles from OpenSubtitles.
 
 ### How It Works
 
-1. Computes the OpenSubtitles file hash
-2. Searches by hash first (most accurate)
-3. Falls back to filename search
-4. Downloads missing languages only (skips existing)
-5. Saves as `.lang.srt` (e.g., `movie.en.srt`, `movie.es.srt`)
+1. Skips videos that already have every configured language
+2. Computes the OpenSubtitles file hash
+3. Reads the IMDb/TMDB IDs and title from the nearest `movie.nfo` / `tvshow.nfo`, and the episode from the file name (`S01E02`, `1x02`)
+4. Searches every configured provider; OpenSubtitles tries hash, then ID, then title
+5. Per language, downloads the best candidate (hash match, trusted, most downloaded); season packs are opened to extract the episode
+6. Saves as UTF-8 `.lang.srt` (e.g., `movie.en.srt`, `movie.es.srt`)
+7. Stops when OpenSubtitles reports its daily quota used up; skips libraries with `download_subtitles: false`
 
 ### Configuration
 
@@ -110,6 +131,9 @@ Downloads subtitles from OpenSubtitles.
 crawlers:
   subtitles:
     api_key: ${OPENSUBTITLES_KEY}
+    subdl_api_key: ""
+    flaresolverr_url: ""      # e.g. http://parasol:8191
+    # providers: [opensubtitles, subdl, subdivx]   # default
     languages:
       - en
       - es
