@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -125,6 +126,8 @@ type downloadSubtitleRequest struct {
 	Language string          `json:"language"`
 }
 
+var langCodeRe = regexp.MustCompile(`^[a-z]{2,3}(-[a-z0-9]{2,4})?$`)
+
 type downloadSubtitleResponse struct {
 	Filename string `json:"filename"`
 	Language string `json:"language"`
@@ -150,6 +153,12 @@ func (s *Server) handleDownloadSubtitle(w http.ResponseWriter, r *http.Request) 
 	lang := strings.ToLower(strings.TrimSpace(req.Language))
 	if lang == "" {
 		lang = "en"
+	}
+	// The language ends up in the file name: accept only language codes
+	// ("es", "pt-br", "zh-cn"), never anything that could hold a path.
+	if !langCodeRe.MatchString(lang) {
+		respondError(w, http.StatusBadRequest, "Invalid language code")
+		return
 	}
 
 	b, err := s.subtitleBackend()
