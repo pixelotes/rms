@@ -19,6 +19,7 @@ What changes the numbers:
 - **Web UI** (`app.ui_enabled`): adds the UI routes and static files; more memory than API-only.
 - **Number of items**: the item index is held in memory, so it grows with library size.
 - **Background jobs**: `auto_scan`, `rescan_interval_minutes` and `tv_refresh_hours` are off by default; when on they add periodic work.
+- **remux-lite**: repackages MKV (H.264/HEVC + AAC) to MP4 inside `rms`, without ffmpeg; it buffers one GOP per stream (a few MB). See [docs/features/streaming.md](docs/features/streaming.md).
 - **Remux / transcode**: run as separate `ffmpeg` child processes (capped by `player.max_ffmpeg_processes`, default 1). Their memory and CPU are not part of the `rms` process, but they count against the container limit. Transcode is the heaviest and is off unless listed in `stream_strategy`.
 - **Crawlers**: `metacrawler` and `subcrawler` are separate binaries that run and exit; their code never loads into the server.
 - **GC tuning**: `app.gogc` / `app.memory_limit_mb` (or `GOGC` / `GOMEMLIMIT`) trade RAM for CPU.
@@ -91,7 +92,7 @@ app:
   debug: false
 
 player:
-  stream_strategy: ["direct", "remux"]   # default; add "transcode" only on Pi 5 / x86
+  stream_strategy: ["direct", "remux-lite", "remux"]   # default; add "transcode" only on Pi 5 / x86
   max_ffmpeg_processes: 1                # extra requests get 503
 
 libraries:

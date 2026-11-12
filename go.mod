@@ -3,6 +3,7 @@ module raspberry-media-server
 go 1.27
 
 require (
+	github.com/Eyevinn/mp4ff v0.62.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/gorilla/mux v1.8.1
 	github.com/gorilla/websocket v1.5.3
