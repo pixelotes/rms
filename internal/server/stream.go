@@ -7,10 +7,12 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 
 	"raspberry-media-server/internal/media"
+	"raspberry-media-server/internal/remuxlite"
 )
 
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
@@ -51,6 +53,8 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	switch strategy {
 	case "direct":
 		s.streamDirect(w, r, filePath)
+	case "remux-lite":
+		s.streamRemuxLite(w, r, filePath)
 	case "remux":
 		s.streamRemux(w, r, filePath)
 	case "transcode":
@@ -83,6 +87,36 @@ func (s *Server) releaseFFmpeg() { <-s.ffmpegSlots }
 
 func (s *Server) streamDirect(w http.ResponseWriter, r *http.Request, filePath string) {
 	http.ServeFile(w, r, filePath)
+}
+
+// streamRemuxLite repackages MKV (H.264/HEVC + AAC) into fragmented MP4 in
+// Go, without ffmpeg: no CPU-heavy work and no ffmpeg slot. Files it cannot
+// handle (other codecs or containers) go to ffmpeg remux when that strategy
+// is enabled, else to direct play. Like the remux pipe it honours ?start=N
+// and has no Range support.
+func (s *Server) streamRemuxLite(w http.ResponseWriter, r *http.Request, filePath string) {
+	if err := remuxlite.Probe(filePath); err != nil {
+		if s.config.Player.AllowsStrategy("remux") {
+			log.Printf("remux-lite: %v; using ffmpeg remux for %s", err, filePath)
+			s.streamRemux(w, r, filePath)
+		} else {
+			log.Printf("remux-lite: %v; using direct play for %s", err, filePath)
+			s.streamDirect(w, r, filePath)
+		}
+		return
+	}
+	f, err := os.Open(filePath)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "File not found")
+		return
+	}
+	defer f.Close()
+
+	w.Header().Set("Content-Type", "video/mp4")
+	start := time.Duration(ffmpegStartSeconds(r) * float64(time.Second))
+	if err := remuxlite.Remux(r.Context(), f, w, start); err != nil && r.Context().Err() == nil {
+		log.Printf("remux-lite: %s: %v", filePath, err)
+	}
 }
 
 func (s *Server) streamRemux(w http.ResponseWriter, r *http.Request, filePath string) {
