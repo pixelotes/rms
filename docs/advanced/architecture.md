@@ -12,9 +12,8 @@ rms/
 │   ├── config/         # YAML config parsing
 │   ├── media/          # Filesystem operations (scanner, NFO, subtitles, probe)
 │   ├── server/         # HTTP server, routes, handlers
-│   └── crawlers/
-│       ├── metadata/   # TMDB, TVmaze, AniList, Kitsu clients
-│       └── subtitles/  # OpenSubtitles client
+│   └── scoutclient/    # Glue to Scout (github.com/pixelotes/scout), which
+│                       # holds the metadata and subtitle providers
 ├── web/                # Web UI (HTML/JS/CSS)
 ├── specs/              # Jellyfin OpenAPI specs for reference
 ├── config/             # Example config

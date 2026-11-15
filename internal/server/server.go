@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/pixelotes/scout"
 
 	"raspberry-media-server/internal/config"
 	"raspberry-media-server/internal/media"
@@ -33,6 +34,11 @@ type Server struct {
 	// webhook debounce (Paso 2)
 	rescanMu    sync.Mutex
 	rescanTimer *time.Timer
+
+	// scout backend for the interactive subtitle search, built on first use
+	scoutOnce sync.Once
+	scout     scout.Backend
+	scoutErr  error
 }
 
 func New(cfg *config.Config) *Server {

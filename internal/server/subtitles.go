@@ -1,16 +1,20 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/pixelotes/scout"
 
-	"raspberry-media-server/internal/crawlers/subtitles"
 	"raspberry-media-server/internal/media"
+	"raspberry-media-server/internal/scoutclient"
 )
 
 func (s *Server) handleSubtitles(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +64,12 @@ type searchSubtitlesRequest struct {
 	Languages []string `json:"languages"`
 }
 
+// subtitleBackend returns the scout backend, built on first use.
+func (s *Server) subtitleBackend() (scout.Backend, error) {
+	s.scoutOnce.Do(func() { s.scout, s.scoutErr = scoutclient.New(s.config) })
+	return s.scout, s.scoutErr
+}
+
 func (s *Server) handleSearchSubtitles(w http.ResponseWriter, r *http.Request) {
 	filePath, ok := s.authorizeSubtitlePath(w, r)
 	if !ok {
@@ -69,32 +79,54 @@ func (s *Server) handleSearchSubtitles(w http.ResponseWriter, r *http.Request) {
 	var req searchSubtitlesRequest
 	_ = json.NewDecoder(r.Body).Decode(&req) // body optional
 
-	client := s.subtitleClient(req.Languages)
-	if client == nil {
-		respondError(w, http.StatusServiceUnavailable, "OpenSubtitles API key not configured")
+	b, err := s.subtitleBackend()
+	if err != nil {
+		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
+	langs := req.Languages
+	if len(langs) == 0 {
+		langs = s.config.Crawlers.Subtitles.Languages
+	}
+	libRoot := filepath.Dir(filePath)
+	if lib, ok := scoutclient.LibraryFor(s.config, filePath); ok {
+		libRoot = lib.Path
+	}
+	q := scoutclient.SubtitleQuery(filePath, libRoot, langs)
+	if text := strings.TrimSpace(req.Query); text != "" {
+		// A typed query replaces the automatic one. An episode in it
+		// ("Show S01E03") wins over the file's; providers add it back.
+		season, episode := q.Season, q.Episode
+		if s, e := scoutclient.ParseEpisode(text); s > 0 || e > 0 {
+			season, episode = s, e
+			text = strings.TrimSpace(scoutclient.StripEpisode(text))
+		}
+		q = scout.SubtitleQuery{Query: text, Languages: langs, Season: season, Episode: episode}
+	}
 
-	results, err := client.Search(subtitles.SearchOpts{
-		VideoPath: filePath,
-		Query:     req.Query,
-		Languages: req.Languages,
-	})
-	if err != nil {
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	results, err := b.SearchSubtitles(ctx, q)
+	switch {
+	case errors.Is(err, scout.ErrNotFound):
+		results = []scout.Subtitle{}
+	case errors.Is(err, scout.ErrUnsupported):
+		respondError(w, http.StatusServiceUnavailable, "No subtitle provider configured (crawlers.subtitles)")
+		return
+	case err != nil:
 		respondError(w, http.StatusBadGateway, err.Error())
 		return
-	}
-
-	if results == nil {
-		results = []subtitles.SearchResult{}
 	}
 	respondJSON(w, http.StatusOK, results)
 }
 
 type downloadSubtitleRequest struct {
-	FileID   int    `json:"file_id"`
-	Language string `json:"language"`
+	Provider string          `json:"provider"`
+	FileID   json.RawMessage `json:"file_id"` // string; numbers from older clients are accepted
+	Language string          `json:"language"`
 }
+
+var langCodeRe = regexp.MustCompile(`^[a-z]{2,3}(-[a-z0-9]{2,4})?$`)
 
 type downloadSubtitleResponse struct {
 	Filename string `json:"filename"`
@@ -108,7 +140,12 @@ func (s *Server) handleDownloadSubtitle(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var req downloadSubtitleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.FileID == 0 {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request")
+		return
+	}
+	fileID := strings.Trim(string(req.FileID), `"`)
+	if fileID == "" || fileID == "0" || fileID == "null" {
 		respondError(w, http.StatusBadRequest, "Invalid request: file_id required")
 		return
 	}
@@ -117,19 +154,35 @@ func (s *Server) handleDownloadSubtitle(w http.ResponseWriter, r *http.Request) 
 	if lang == "" {
 		lang = "en"
 	}
+	// The language ends up in the file name: accept only language codes
+	// ("es", "pt-br", "zh-cn"), never anything that could hold a path.
+	if !langCodeRe.MatchString(lang) {
+		respondError(w, http.StatusBadRequest, "Invalid language code")
+		return
+	}
 
-	client := s.subtitleClient(nil)
-	if client == nil {
-		respondError(w, http.StatusServiceUnavailable, "OpenSubtitles API key not configured")
+	b, err := s.subtitleBackend()
+	if err != nil {
+		respondError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	f, err := b.DownloadSubtitle(ctx, req.Provider, fileID)
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, scout.ErrQuotaExceeded) {
+			status = http.StatusTooManyRequests
+		}
+		respondError(w, status, err.Error())
 		return
 	}
 
 	videoBase := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
 	destName := videoBase + "." + lang + ".srt"
-	destPath := filepath.Join(filepath.Dir(filePath), destName)
-
-	if err := client.Download(req.FileID, destPath); err != nil {
-		respondError(w, http.StatusBadGateway, err.Error())
+	if err := scoutclient.WriteFile(filepath.Join(filepath.Dir(filePath), destName), f.Data); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -156,18 +209,4 @@ func (s *Server) authorizeSubtitlePath(w http.ResponseWriter, r *http.Request) (
 		return "", false
 	}
 	return filePath, true
-}
-
-// subtitleClient constructs an OpenSubtitles client using the server's configured
-// API key. Returns nil if no key is set. languages is optional; an empty slice
-// falls back to the config-level default.
-func (s *Server) subtitleClient(languages []string) *subtitles.Client {
-	key := s.config.Crawlers.Subtitles.APIKey
-	if key == "" {
-		return nil
-	}
-	if len(languages) == 0 {
-		languages = s.config.Crawlers.Subtitles.Languages
-	}
-	return subtitles.NewClient(key, languages)
 }
