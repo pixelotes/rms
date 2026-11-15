@@ -31,13 +31,15 @@ app:
   # webhook_token: "${RMS_WEBHOOK_TOKEN}"
 
 player:
-  # Strategies tried in order when playing video. Default: ["direct", "remux"].
-  # "remux" copies the video stream (cheap); "transcode" re-encodes with ffmpeg
+  # Strategies tried in order when playing video. Default: ["direct", "remux-lite", "remux"].
+  # "remux-lite" repackages MKV with H.264/HEVC + AAC to MP4 in Go (no ffmpeg);
+  # other files fall through to "remux". "remux" copies the video stream with
+  # ffmpeg (cheap); "transcode" re-encodes with ffmpeg
   # and saturates a Raspberry Pi 3B, so it is OFF unless you list it here.
   # When "transcode" is enabled, Jellyfin clients are also offered a progressive
   # H.264/AAC MP4 transcode (TranscodingUrl) as a last resort.
-  stream_strategy: ["direct", "remux"]
-  # stream_strategy: ["direct", "remux", "transcode"]   # Pi 5 / x86 only
+  stream_strategy: ["direct", "remux-lite", "remux"]
+  # stream_strategy: ["direct", "remux-lite", "remux", "transcode"]   # Pi 5 / x86 only
   # Max simultaneous ffmpeg processes (remux/transcode). Extra requests get a
   # 503 instead of saturating the CPU. Default 1; raise on a Pi 5 / x86.
   max_ffmpeg_processes: 1

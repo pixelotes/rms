@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-    const state = { sessionToken: '', username: '', currentPath: '', libraries: [], streamStrategies: ['direct', 'remux'], serverStrategies: ['direct', 'remux'], currentStrategyIndex: 0, currentBg: null, subtitleOffset: 0, subs: [], currentVideoPath: null, nextEpisodePath: null, nextEpisodeTimer: null, prefs: null };
+    const state = { sessionToken: '', username: '', currentPath: '', libraries: [], streamStrategies: ['direct', 'remux-lite', 'remux'], serverStrategies: ['direct', 'remux-lite', 'remux'], currentStrategyIndex: 0, currentBg: null, subtitleOffset: 0, subs: [], currentVideoPath: null, nextEpisodePath: null, nextEpisodeTimer: null, prefs: null };
     const $ = id => document.getElementById(id);
     const loginScreen = $('login-screen'), appContainer = $('app-container'), loginForm = $('login-form');
     const fileBrowser = $('file-browser'), videoPlayerModal = $('video-player-modal');

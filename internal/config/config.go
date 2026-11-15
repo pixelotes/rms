@@ -80,7 +80,8 @@ type AppConfig struct {
 
 type PlayerConfig struct {
 	// StreamStrategy lists the playback strategies the server may use, in
-	// fallback order. "direct" is always allowed. "remux" and "transcode"
+	// fallback order. "direct" is always allowed. "remux-lite" repackages
+	// MKV (H.264/HEVC + AAC) in Go without ffmpeg. "remux" and "transcode"
 	// spawn ffmpeg; "transcode" is CPU-heavy and is OFF unless listed here.
 	StreamStrategy []string `yaml:"stream_strategy"`
 	// MaxFFmpegProcesses caps how many ffmpeg remux/transcode processes may
@@ -198,8 +199,8 @@ func (c *Config) setDefaults() {
 	}
 	if len(c.Player.StreamStrategy) == 0 {
 		// Transcoding is opt-in: it saturates a Raspberry Pi 3B, so the
-		// default only allows direct play and (stream-copy) remux.
-		c.Player.StreamStrategy = []string{"direct", "remux"}
+		// default only allows direct play and the stream-copy remuxes.
+		c.Player.StreamStrategy = []string{"direct", "remux-lite", "remux"}
 	}
 	if c.Player.MaxFFmpegProcesses <= 0 {
 		c.Player.MaxFFmpegProcesses = 1
